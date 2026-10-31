@@ -1,0 +1,45 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage | Out-Null
+          $vst = Get-ChildItem -Recurse -Directory build -Filter "Noir Guitar.vst3" | Select-Object -First 1
+          Copy-Item $vst.FullName -Destination "stage\Noir Guitar.vst3" -Recurse
+          $exe = Get-ChildItem -Recurse -File build -Filter "Noir Guitar.exe" | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "stage\Noir Guitar.exe"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\NoirGuitar.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NoirGuitar-Setup
+          path: dist/NoirGuitar-Setup.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/NoirGuitar-Setup.exe
