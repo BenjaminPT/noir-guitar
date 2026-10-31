@@ -5,30 +5,8 @@
 #include <atomic>
 #include <memory>
 #include "Dsp.h"
-
-namespace ids
-{
-inline constexpr const char* in = "in";
-inline constexpr const char* gate = "gate";
-inline constexpr const char* odOn = "odOn";
-inline constexpr const char* odDrive = "odDrive";
-inline constexpr const char* odTone = "odTone";
-inline constexpr const char* odLevel = "odLevel";
-inline constexpr const char* gain = "gain";
-inline constexpr const char* bass = "bass";
-inline constexpr const char* mid = "mid";
-inline constexpr const char* treble = "treble";
-inline constexpr const char* presence = "presence";
-inline constexpr const char* master = "master";
-inline constexpr const char* cabOn = "cabOn";
-inline constexpr const char* cabType = "cabType";
-inline constexpr const char* dlyTime = "dlyTime";
-inline constexpr const char* dlyFb = "dlyFb";
-inline constexpr const char* dlyMix = "dlyMix";
-inline constexpr const char* revSize = "revSize";
-inline constexpr const char* revMix = "revMix";
-inline constexpr const char* out = "out";
-} // namespace ids
+#include "Effects.h"
+#include "Params.h"
 
 class NoirProcessor : public juce::AudioProcessor
 {
@@ -66,6 +44,11 @@ public:
     juce::String getIRName() const { return irPath.isEmpty() ? juce::String() : juce::File (irPath).getFileNameWithoutExtension(); }
     bool hasIR() const { return irLoaded.load(); }
 
+    // Parameter helpers (message thread)
+    juce::RangedAudioParameter* param (Id i) { return apvts.getParameter (paramId (i)); }
+    void setParamValue (Id i, float plainValue);
+    void resetAllParams();
+
     juce::AudioProcessorValueTreeState apvts;
 
     // Peak meters, written by the audio thread, read-and-cleared by the editor.
@@ -74,33 +57,46 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
-    struct Params
-    {
-        std::atomic<float> *in, *gate, *odOn, *odDrive, *odTone, *odLevel, *gain, *bass, *mid, *treble,
-                           *presence, *master, *cabOn, *cabType, *dlyTime, *dlyFb, *dlyMix, *revSize,
-                           *revMix, *out;
-    } p {};
+    float v (Id i) const noexcept { return raw[i]->load(); }
+    bool on (Id i) const noexcept { return raw[i]->load() > 0.5f; }
+    void resetEffects();
+
+    std::atomic<float>* raw[NumParams] {};
 
     double sr = 44100.0;
     int maxBlock = 512;
 
+    // Faders (click-free on/off for every pedal)
+    noir::Fader fPower, fGate, fComp, fWah, fPitch, fBoost, fCab, fEq, fM1, fM2, fLo, fDly, fRev;
+    noir::Fader fAmp; // runs at the oversampled rate
+
     // DSP
     noir::NoiseGate gate;
+    noir::Compressor comp;
+    noir::Wah wah;
+    noir::PitchShifter pitch, shimmer;
+    noir::Boost boost;
     noir::DriveStage drive;
     noir::AmpStage amp;
     noir::Cabinet cab;
-    noir::StereoDelay delay;
+    noir::Eq4 eq;
+    noir::ModFx mod1, mod2;
+    noir::LoFi lofi;
+    noir::TimeDelay delay;
+    noir::Biquad revHp, revLp, springPeak;
     juce::dsp::Reverb reverb;
     juce::dsp::Convolution convolution;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
 
-    juce::SmoothedValue<float> inGainSm, masterSm, revMixSm, outGainSm;
+    juce::SmoothedValue<float> inGainSm, masterSm, outGainSm;
 
-    juce::AudioBuffer<float> monoBuf, fxBuf, wetBuf;
+    juce::AudioBuffer<float> monoBuf, dryBuf, rawBuf, fxBuf, wetBuf;
 
     juce::String irPath;
     std::atomic<bool> irLoaded { false };
-    bool wasIR = false;
+    bool wasIR = false, wasActive = false;
+    int revIdle = 0, lastRevType = -1;
+    float revMixTarget = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NoirProcessor)
 };

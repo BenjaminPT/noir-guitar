@@ -138,64 +138,6 @@ private:
 };
 
 //==============================================================================
-// Tube-screamer style overdrive: unity lows, boosted/clipped highs, tone sweep, mid hump.
-// Runs at the oversampled rate.
-class DriveStage
-{
-public:
-    void prepare (double osRate)
-    {
-        sr = osRate;
-        hp.highpass (sr, 720.0, 0.707);
-        pre.lowpass (sr, 5200.0, 0.707);
-        mid.peaking (sr, 900.0, 0.8, 3.0);
-        gainSm.reset (sr, 0.03);
-        levelSm.reset (sr, 0.03);
-        mixSm.reset (sr, 0.01);
-        gainSm.setCurrentAndTargetValue (1.0f);
-        levelSm.setCurrentAndTargetValue (1.0f);
-        mixSm.setCurrentAndTargetValue (0.0f);
-        lastTone = -1.0f;
-        reset();
-    }
-
-    void reset() noexcept { hp.reset(); pre.reset(); tone.reset(); mid.reset(); }
-
-    void setParams (bool on, float drive01, float tone01, float levelDb)
-    {
-        mixSm.setTargetValue (on ? 1.0f : 0.0f);
-        gainSm.setTargetValue (std::pow (10.0f, drive01 * 2.0f));          // 0..40 dB on the highs
-        levelSm.setTargetValue (juce::Decibels::decibelsToGain (levelDb));
-        if (std::abs (tone01 - lastTone) > 1.0e-4f)
-        {
-            lastTone = tone01;
-            tone.lowpass (sr, 900.0 * std::pow (10.0, (double) tone01), 0.707); // 0.9k .. 9k
-        }
-    }
-
-    inline float process (float x) noexcept
-    {
-        const float m  = mixSm.getNextValue();
-        const float g  = gainSm.getNextValue();
-        const float lv = levelSm.getNextValue();
-
-        float y = x + g * hp.process (x);
-        y = pre.process (y);
-        y = std::tanh (y);
-        y = tone.process (y * 0.8f);
-        y = mid.process (y) * lv;
-        return x + (y - x) * m;
-    }
-
-private:
-    double sr = 44100.0;
-    Biquad hp, pre, tone, mid;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSm, levelSm;
-    juce::SmoothedValue<float> mixSm;
-    float lastTone = -1.0f;
-};
-
-//==============================================================================
 // Two cascaded asymmetric triode-style gain stages, post-preamp tone stack, soft power stage.
 // Runs at the oversampled rate.
 class AmpStage
@@ -360,69 +302,6 @@ public:
 private:
     std::vector<float> buf;
     int mask = 0, w = 0;
-};
-
-// Tape-flavoured ping-pong delay (dark, slightly wobbly feedback path).
-class StereoDelay
-{
-public:
-    void prepare (double sampleRate)
-    {
-        sr = sampleRate;
-        lineL.prepare ((int) (sr * 1.1) + 16);
-        lineR.prepare ((int) (sr * 1.1) + 16);
-        timeSm.reset (sr, 0.12);
-        mixSm.reset (sr, 0.03);
-        timeSm.setCurrentAndTargetValue (350.0f);
-        mixSm.setCurrentAndTargetValue (0.0f);
-        hpL.highpass (sr, 160.0, 0.707); hpR.highpass (sr, 160.0, 0.707);
-        lpL.lowpass  (sr, 3800.0, 0.707); lpR.lowpass  (sr, 3800.0, 0.707);
-        lfoInc = 2.0 * kPi * 0.45 / sr;
-        lfo = 0.0;
-        reset();
-    }
-
-    void reset() noexcept
-    {
-        lineL.clear(); lineR.clear();
-        hpL.reset(); hpR.reset(); lpL.reset(); lpR.reset();
-    }
-
-    void setParams (float timeMs, float feedbackAmt, float mix) noexcept
-    {
-        timeSm.setTargetValue (timeMs);
-        mixSm.setTargetValue (mix);
-        feedback = feedbackAmt;
-    }
-
-    inline void process (float in, float& outL, float& outR) noexcept
-    {
-        const double base = (double) timeSm.getNextValue() * 0.001 * sr;
-        const float mix = mixSm.getNextValue();
-        const double mod = 0.0012 * sr;
-
-        lfo += lfoInc;
-        if (lfo > 2.0 * kPi) lfo -= 2.0 * kPi;
-
-        const float dL = lineL.read (base + mod * std::sin (lfo));
-        const float dR = lineR.read (base + mod * std::sin (lfo + 2.1));
-
-        const float fbL = std::tanh (lpL.process (hpL.process (dR))) * feedback;
-        const float fbR = std::tanh (lpR.process (hpR.process (dL))) * feedback;
-
-        lineL.write (in + fbL);
-        lineR.write (fbR);
-
-        outL = in + dL * mix;
-        outR = in + dR * mix;
-    }
-
-private:
-    double sr = 44100.0, lfo = 0.0, lfoInc = 0.0;
-    DelayLine lineL, lineR;
-    Biquad hpL, hpR, lpL, lpR;
-    juce::SmoothedValue<float> timeSm, mixSm;
-    float feedback = 0.3f;
 };
 
 // Gentle safety limiter so a wrong knob never hurts anyone's ears.
