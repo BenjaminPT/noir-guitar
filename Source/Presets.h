@@ -85,6 +85,34 @@ inline const std::vector<PresetDef>& factoryPresets()
             { PitchOn, 1 }, { PitchType, 2 }, { PitchMix, 0.5f },
             { DrvType, 2 }, { DrvDrive, 0.6f },
             { DlyOn, 1 }, { DlyType, 1 }, { DlyMix, 0.25f } } },
+
+        { "Granular Clouds", {
+            { DrvOn, 0 }, { AmpGain, 2 },
+            { GrOn, 1 }, { GrSize, 160 }, { GrDens, 0.45f }, { GrSpread, 0.6f }, { GrMix, 0.7f },
+            { RevOn, 1 }, { RevType, 4 }, { RevSize, 0.8f }, { RevMix, 0.45f } } },
+
+        { "Talk Box Lead", {
+            { DrvType, 1 }, { DrvDrive, 0.5f }, { AmpGain, 6.5f },
+            { TbOn, 1 }, { TbVowel, 0.3f }, { TbAuto, 0.35f }, { TbRes, 0.6f },
+            { DlyOn, 1 }, { DlyType, 1 }, { DlyMix, 0.2f } } },
+
+        { "Stutter Glitch", {
+            { DrvDrive, 0.3f }, { GltOn, 1 }, { GltMode, 0 }, { GltLen, 125 }, { GltAmt, 0.5f },
+            { RevOn, 1 }, { RevType, 2 }, { RevMix, 0.15f } } },
+
+        { "Looper Jam", {
+            { DrvOn, 0 }, { AmpGain, 3 }, { LoopOn, 1 },
+            { DlyOn, 1 }, { DlyType, 2 }, { DlyMix, 0.2f },
+            { RevOn, 1 }, { RevType, 1 }, { RevMix, 0.25f } } },
+
+        { "Reverse Dream", {
+            { DrvOn, 0 }, { AmpGain, 3 },
+            { DlyOn, 1 }, { DlyType, 5 }, { DlyTime, 600 }, { DlyFb, 0.4f }, { DlyMix, 0.45f },
+            { RevOn, 1 }, { RevType, 1 }, { RevMix, 0.3f } } },
+
+        { "Multi-Tap Rhythm", {
+            { DrvDrive, 0.25f }, { AmpGain, 4.5f },
+            { DlyOn, 1 }, { DlyType, 6 }, { DlyTime, 400 }, { DlyFb, 0.3f }, { DlyMix, 0.4f } } },
     };
     return list;
 }
@@ -96,6 +124,7 @@ inline void applyPreset (NoirProcessor& proc, int index)
         return;
 
     proc.resetAllParams();
+    proc.setChainOrder (NoirProcessor::defaultOrder());
     for (const auto& kv : list[(size_t) index].values)
         proc.setParamValue (kv.first, kv.second);
 }

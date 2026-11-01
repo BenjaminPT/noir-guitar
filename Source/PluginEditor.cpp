@@ -1,6 +1,28 @@
 #include "PluginEditor.h"
 #include "Presets.h"
 
+namespace
+{
+const juce::Colour cDyn   { 0xff4fb3a9 };
+const juce::Colour cFilt  { 0xffc57be0 };
+const juce::Colour cPitch { 0xfff0709a };
+const juce::Colour cGain  { 0xffe8a33d };
+const juce::Colour cAmp   { 0xffe0674a };
+const juce::Colour cEq    { 0xff7fc47f };
+const juce::Colour cMod   { 0xff5b9bd5 };
+const juce::Colour cLofi  { 0xffb8b86a };
+const juce::Colour cTime  { 0xff9b86e8 };
+const juce::Colour cVoice { 0xffe39a6b };
+const juce::Colour cGrain { 0xff56c2c2 };
+const juce::Colour cGlit  { 0xffe5605f };
+const juce::Colour cLoop  { 0xffd8c85a };
+const juce::Colour cOut   { 0xffd8d6d0 };
+
+const juce::Colour slotColour[NumSlots] = {
+    cDyn, cDyn, cFilt, cPitch, cGain, cGain, cAmp, cAmp, cEq, cVoice, cVoice,
+    cMod, cMod, cLofi, cGlit, cGrain, cGrain, cTime, cTime, cLoop };
+}
+
 //==============================================================================
 NoirLookAndFeel::NoirLookAndFeel()
 {
@@ -64,6 +86,19 @@ void NoirLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b
         return;
     }
 
+    if (b.getProperties().contains ("label"))   // small labelled switch
+    {
+        const auto col = juce::Colour (0xffd8c85a);
+        g.setColour (on ? col.withAlpha (0.22f) : juce::Colours::transparentBlack);
+        g.fillRoundedRectangle (r.reduced (0.5f), 5.0f);
+        g.setColour (on ? col : line);
+        g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
+        g.setColour (on ? text : dim);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (b.getButtonText(), b.getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
     // Pedal LED
     const auto col = juce::Colour ((juce::uint32) (int) b.getProperties().getWithDefault ("accent", (int) accent.getARGB()));
     const auto dot = juce::Rectangle<float> (10.0f, 10.0f).withCentre (r.getCentre());
@@ -83,9 +118,11 @@ void NoirLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b
 void NoirLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hl, bool down)
 {
     const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (down ? line : (hl ? line.brighter (0.1f) : juce::Colours::transparentBlack));
+    const bool lit = b.getToggleState();
+    const auto col = juce::Colour ((juce::uint32) (int) b.getProperties().getWithDefault ("accent", (int) accent.getARGB()));
+    g.setColour (lit ? col.withAlpha (0.22f) : (down ? line : (hl ? line.brighter (0.1f) : juce::Colours::transparentBlack)));
     g.fillRoundedRectangle (r, 5.0f);
-    g.setColour (line);
+    g.setColour (lit ? col : line);
     g.drawRoundedRectangle (r, 5.0f, 1.0f);
 }
 
@@ -102,6 +139,68 @@ void NoirLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, int, 
     arrow.addTriangle (cx - 3.5f, cy - 1.5f, cx + 3.5f, cy - 1.5f, cx, cy + 2.5f);
     g.setColour (dim);
     g.fillPath (arrow);
+}
+
+//==============================================================================
+void TunerView::setReading (float freqHz, float refA4)
+{
+    bool nowValid = freqHz > 20.0f;
+    juce::String nn = "--";
+    float c = 0.0f;
+
+    if (nowValid)
+    {
+        static const char* names[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        const float midi = 69.0f + 12.0f * std::log2 (freqHz / refA4);
+        const int n = (int) std::lround (midi);
+        c = (midi - (float) n) * 100.0f;
+        nn = juce::String (names[((n % 12) + 12) % 12]) + juce::String (n / 12 - 1);
+    }
+
+    if (nowValid != valid || nn != note || std::abs (c - cents) > 0.4f)
+    {
+        valid = nowValid; note = nn; cents = c; hz = freqHz;
+        repaint();
+    }
+}
+
+void TunerView::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    const bool inTune = valid && std::abs (cents) < 5.0f;
+    const auto col = ! valid ? NoirLookAndFeel::dim : (inTune ? juce::Colour (0xff7fd48a) : NoirLookAndFeel::accent);
+
+    g.setColour (col);
+    g.setFont (juce::FontOptions (r.getHeight() * 0.50f, juce::Font::bold));
+    g.drawText (note, r.removeFromTop (r.getHeight() * 0.58f).toNearestInt(), juce::Justification::centred);
+
+    auto bar = r.reduced (8.0f, 0.0f).withTrimmedBottom (4.0f);
+    const float y = bar.getCentreY();
+    g.setColour (NoirLookAndFeel::line);
+    g.drawLine (bar.getX(), y, bar.getRight(), y, 1.5f);
+    for (int i = -5; i <= 5; ++i)
+    {
+        const float x = bar.getCentreX() + (float) i / 5.0f * bar.getWidth() * 0.5f;
+        g.drawLine (x, y - (i == 0 ? 6.0f : 3.0f), x, y + (i == 0 ? 6.0f : 3.0f), 1.0f);
+    }
+    if (valid)
+    {
+        const float x = bar.getCentreX() + juce::jlimit (-50.0f, 50.0f, cents) / 50.0f * bar.getWidth() * 0.5f;
+        g.setColour (col);
+        g.fillEllipse (x - 4.0f, y - 4.0f, 8.0f, 8.0f);
+    }
+}
+
+void LoopBar::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (0.0f, 2.0f);
+    g.setColour (NoirLookAndFeel::line);
+    g.fillRoundedRectangle (r, 2.0f);
+    if (hasData)
+    {
+        g.setColour (juce::Colour (0xffd8c85a));
+        g.fillRoundedRectangle (r.withWidth (juce::jmax (3.0f, r.getWidth() * progress)), 2.0f);
+    }
 }
 
 //==============================================================================
@@ -147,6 +246,7 @@ Pedal::Pedal (juce::AudioProcessorValueTreeState& s, const juce::String& t, juce
 
 int Pedal::desiredWidth() const
 {
+    if (fixedWidth > 0) return fixedWidth;
     int w = (int) knobs.size() * 72 + 24;
     if (typeId >= 0) w = juce::jmax (w, 164);
     return juce::jmax (w, 110);
@@ -185,20 +285,27 @@ void Pedal::paint (juce::Graphics& g)
     g.setColour (isOn ? accent.withAlpha (0.45f) : NoirLookAndFeel::line);
     g.drawRoundedRectangle (r.reduced (0.5f), 9.0f, 1.0f);
 
-    // accent bar
     g.setColour (isOn ? accent : NoirLookAndFeel::line.brighter (0.1f));
     g.fillRoundedRectangle (r.getX() + 14.0f, r.getY() + 1.0f, 26.0f, 2.5f, 1.2f);
 
     const int textX = onId >= 0 ? 36 : 14;
     g.setColour (isOn ? NoirLookAndFeel::text : NoirLookAndFeel::dim);
     g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.drawText (title.toUpperCase(), textX, 9, getWidth() - textX - 10, 18, juce::Justification::centredLeft);
+    g.drawText (title.toUpperCase(), textX, 9, getWidth() - textX - 24, 18, juce::Justification::centredLeft);
 
     if (subtitle.isNotEmpty())
     {
         g.setColour (NoirLookAndFeel::dim);
         g.setFont (juce::FontOptions (10.0f));
-        g.drawText (subtitle, textX, 24, getWidth() - textX - 10, 12, juce::Justification::centredLeft);
+        g.drawText (subtitle, textX, 24, getWidth() - textX - 24, 12, juce::Justification::centredLeft);
+    }
+
+    if (slot >= 0)   // grip: six dots, top right
+    {
+        g.setColour (NoirLookAndFeel::dim.withAlpha (0.55f));
+        for (int ix = 0; ix < 2; ++ix)
+            for (int iy = 0; iy < 3; ++iy)
+                g.fillEllipse ((float) getWidth() - 20.0f + (float) ix * 5.0f, 11.0f + (float) iy * 5.0f, 2.2f, 2.2f);
     }
 }
 
@@ -217,9 +324,9 @@ void Pedal::resized()
     auto body = a.reduced (6, 2).withTrimmedBottom (4);
 
     if (onLayoutBody)
-        onLayoutBody (body);
+        body = onLayoutBody (body);
 
-    if (knobs.empty()) return;
+    if (knobs.empty() || body.isEmpty()) return;
 
     const int w = body.getWidth() / (int) knobs.size();
     for (auto& k : knobs)
@@ -230,53 +337,83 @@ void Pedal::resized()
     }
 }
 
+void Pedal::mouseMove (const juce::MouseEvent& e)
+{
+    setMouseCursor (slot >= 0 && e.y < 38 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void Pedal::mouseDown (const juce::MouseEvent& e)
+{
+    dragArmed = slot >= 0 && e.y < 38 && ! e.mods.isPopupMenu();
+    if (dragArmed && onDragStart) onDragStart (*this, e);
+}
+
+void Pedal::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragArmed && onDragMove) onDragMove (*this, e);
+}
+
+void Pedal::mouseUp (const juce::MouseEvent& e)
+{
+    if (dragArmed)
+    {
+        dragArmed = false;
+        if (onDragEnd) onDragEnd (*this, e);
+    }
+}
+
 //==============================================================================
-ChainStrip::ChainStrip (NoirProcessor& p, std::vector<Item> it) : proc (p), items (std::move (it)) {}
+ChainStrip::ChainStrip (NoirProcessor& p, std::vector<juce::Colour> c) : proc (p), colours (std::move (c)) {}
 
 juce::Rectangle<float> ChainStrip::boxFor (int i) const
 {
-    const float gap = 14.0f;
-    const float n = (float) items.size();
+    const float gap = 9.0f;
+    const float n = (float) (NumSlots + 2);
     const float w = ((float) getWidth() - gap * (n - 1.0f)) / n;
-    return { (w + gap) * (float) i, 4.0f, w, (float) getHeight() - 8.0f };
+    return { (w + gap) * (float) i, 3.0f, w, (float) getHeight() - 6.0f };
 }
 
 int ChainStrip::indexAt (juce::Point<int> pt) const
 {
-    for (int i = 0; i < (int) items.size(); ++i)
-        if (boxFor (i).contains (pt.toFloat()) && items[(size_t) i].onId >= 0)
+    for (int i = 1; i <= NumSlots; ++i)
+        if (boxFor (i).contains (pt.toFloat()))
             return i;
     return -1;
 }
 
 void ChainStrip::paint (juce::Graphics& g)
 {
-    for (int i = 0; i < (int) items.size(); ++i)
+    auto isOn = [this] (int idx)
     {
-        const auto& it = items[(size_t) i];
-        const auto b = boxFor (i);
-        const bool endpoint = it.onId < 0;
-        const bool on = endpoint || proc.apvts.getRawParameterValue (kParams[it.onId].id)->load() > 0.5f;
+        if (idx == 0 || idx == NumSlots + 1) return true;
+        return proc.apvts.getRawParameterValue (kParams[kSlotOn[order[(size_t) idx - 1]]].id)->load() > 0.5f;
+    };
 
-        if (i + 1 < (int) items.size())
+    for (int i = 0; i < NumSlots + 2; ++i)
+    {
+        const bool endpoint = i == 0 || i == NumSlots + 1;
+        const int slot = endpoint ? -1 : order[(size_t) i - 1];
+        const auto b = boxFor (i);
+        const bool on = isOn (i);
+
+        if (i + 1 < NumSlots + 2)
         {
             const auto nb = boxFor (i + 1);
             const float y = b.getCentreY();
-            const bool lit = on && (items[(size_t) i + 1].onId < 0 ||
-                             proc.apvts.getRawParameterValue (kParams[items[(size_t) i + 1].onId].id)->load() > 0.5f);
-            g.setColour (lit ? NoirLookAndFeel::dim : NoirLookAndFeel::line);
-            g.drawLine (b.getRight() + 1.0f, y, nb.getX() - 1.0f, y, 1.2f);
+            g.setColour (on && isOn (i + 1) ? NoirLookAndFeel::dim : NoirLookAndFeel::line);
+            g.drawLine (b.getRight() + 0.5f, y, nb.getX() - 0.5f, y, 1.2f);
         }
 
-        const auto col = endpoint ? NoirLookAndFeel::dim : it.colour;
-        g.setColour (on && ! endpoint ? col.withAlpha (hover == i ? 0.30f : 0.20f) : NoirLookAndFeel::panel);
-        g.fillRoundedRectangle (b, 6.0f);
+        const auto col = endpoint ? NoirLookAndFeel::dim : colours[(size_t) slot];
+        g.setColour (on && ! endpoint ? col.withAlpha (hover == i ? 0.32f : 0.20f) : NoirLookAndFeel::panel);
+        g.fillRoundedRectangle (b, 5.0f);
         g.setColour (on ? col.withAlpha (endpoint ? 0.5f : 0.9f) : NoirLookAndFeel::line);
-        g.drawRoundedRectangle (b.reduced (0.5f), 6.0f, 1.0f);
+        g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
 
         g.setColour (on ? NoirLookAndFeel::text : NoirLookAndFeel::dim.withAlpha (0.7f));
-        g.setFont (juce::FontOptions (10.5f, endpoint ? juce::Font::plain : juce::Font::bold));
-        g.drawText (it.name.toUpperCase(), b.toNearestInt(), juce::Justification::centred);
+        g.setFont (juce::FontOptions (9.5f, endpoint ? juce::Font::plain : juce::Font::bold));
+        g.drawText (endpoint ? (i == 0 ? "IN" : "OUT") : juce::String (kSlotShort[slot]).toUpperCase(),
+                    b.toNearestInt(), juce::Justification::centred);
     }
 }
 
@@ -291,7 +428,7 @@ void ChainStrip::mouseDown (const juce::MouseEvent& e)
 {
     const int i = indexAt (e.getPosition());
     if (i < 0) return;
-    if (auto* p = proc.param ((Id) items[(size_t) i].onId))
+    if (auto* p = proc.param (kSlotOn[order[(size_t) i - 1]]))
     {
         p->beginChangeGesture();
         p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f);
@@ -301,67 +438,168 @@ void ChainStrip::mouseDown (const juce::MouseEvent& e)
 }
 
 //==============================================================================
+Pedal* NoirEditor::makePedal (int slot)
+{
+    auto make = [this] (const char* title, juce::Colour c, int on, int type, std::initializer_list<Id> k, const char* sub) -> Pedal*
+    {
+        auto ped = std::make_unique<Pedal> (proc.apvts, title, c, on, type, k, sub);
+        auto* p = ped.get();
+        addAndMakeVisible (p);
+        pedals.push_back (std::move (ped));
+        return p;
+    };
+
+    switch (slot)
+    {
+        case SGate:   return make ("Noise Gate", cDyn,   GateOn,  -1,        { GateThr },                          "Dynamics");
+        case SComp:   return make ("Compressor", cDyn,   CompOn,  -1,        { CompAmt, CompLvl, CompAtk },        "Dynamics / Sustain");
+        case SWah:    return make ("Wah",        cFilt,  WahOn,   WahMode,   { WahPos, WahQ },                     "Filter");
+        case SPitch:  return make ("Pitch",      cPitch, PitchOn, PitchType, { PitchShift, PitchMix },             "Pitch");
+        case SBoost:  return make ("Boost",      cGain,  BoostOn, BoostType, { BoostGain },                        "Gain / EQ boost");
+        case SDrive:  return make ("Drive",      cGain,  DrvOn,   DrvType,   { DrvDrive, DrvTone, DrvLevel },      "Gain");
+        case SAmp:    return make ("Amp",        cAmp,   AmpOn,   -1,        { AmpGain, AmpBass, AmpMid, AmpTreble, AmpPres }, "Preamp + power stage");
+        case SCab:    return make ("Cabinet",    cAmp,   CabOn,   CabType,   {},                                   "Speaker / IR");
+        case SEq:     return make ("EQ",         cEq,    EqOn,    -1,        { EqLow, EqLowMid, EqHiMid, EqHigh }, "4-band parametric");
+        case STalk:   return make ("Talk Box",   cVoice, TbOn,    -1,        { TbVowel, TbAuto, TbRes, TbMix },    "Vowel formants");
+        case SVoc:    return make ("Vocoder",    cVoice, VocOn,   -1,        { VocSens, VocBright, VocMix },       "Mic on input 2");
+        case SMod1:   return make ("Mod 1",      cMod,   M1On,    M1Type,    { M1Rate, M1Depth, M1Mix },           "Modulation");
+        case SMod2:   return make ("Mod 2",      cMod,   M2On,    M2Type,    { M2Rate, M2Depth, M2Mix },           "Modulation");
+        case SLofi:   return make ("Lo-Fi",      cLofi,  LoOn,    -1,        { LoBits, LoRate, LoMix },            "Bitcrusher / Sample rate");
+        case SGlitch: return make ("Glitch",     cGlit,  GltOn,   GltMode,   { GltLen, GltAmt, GltMix },           "Stutter / Glitch");
+        case SGran:   return make ("Granular",   cGrain, GrOn,    -1,        { GrSize, GrDens, GrPitch, GrSpread, GrMix }, "Grain cloud");
+        case SFreeze: return make ("Freeze",     cGrain, FrzOn,   -1,        { FrzSize, FrzMix },                  "Hold / infinite sustain");
+        case SDelay:  return make ("Delay",      cTime,  DlyOn,   DlyType,   { DlyTime, DlyFb, DlyMix },           "Echo");
+        case SReverb: return make ("Reverb",     cTime,  RevOn,   RevType,   { RevSize, RevMix },                  "Space");
+        case SLooper: return make ("Looper",     cLoop,  LoopOn,  LoopSpeed, { LoopLevel },                        "Record / overdub");
+        default:      return nullptr;
+    }
+}
+
 NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
 {
     setLookAndFeel (&laf);
 
-    const auto cDyn   = juce::Colour (0xff4fb3a9);
-    const auto cFilt  = juce::Colour (0xffc57be0);
-    const auto cPitch = juce::Colour (0xfff0709a);
-    const auto cGain  = juce::Colour (0xffe8a33d);
-    const auto cAmp   = juce::Colour (0xffe0674a);
-    const auto cEq    = juce::Colour (0xff7fc47f);
-    const auto cMod   = juce::Colour (0xff5b9bd5);
-    const auto cLofi  = juce::Colour (0xffb8b86a);
-    const auto cTime  = juce::Colour (0xff9b86e8);
-    const auto cOut   = juce::Colour (0xffd8d6d0);
-
-    auto make = [this] (const char* title, juce::Colour c, int on, int type, std::initializer_list<Id> k, const char* sub = "") -> Pedal*
+    for (int s = 0; s < NumSlots; ++s)
     {
-        auto ped = std::make_unique<Pedal> (proc.apvts, title, c, on, type, k, sub);
-        auto* raw = ped.get();
-        addAndMakeVisible (raw);
-        pedals.push_back (std::move (ped));
-        return raw;
+        auto* ped = makePedal (s);
+        ped->slot = s;
+        bySlot[s] = ped;
+        ped->onDragStart = [this] (Pedal& pd, const juce::MouseEvent& e)
+        {
+            dragging = &pd;
+            grabOffset = e.getEventRelativeTo (this).getPosition() - pd.getPosition();
+            pd.toFront (false);
+            pd.setAlpha (0.92f);
+            repaint();
+        };
+        ped->onDragMove = [this] (Pedal& pd, const juce::MouseEvent& e)
+        {
+            if (dragging != &pd) return;
+            const auto pos = e.getEventRelativeTo (this).getPosition();
+            juce::Desktop::getInstance().getAnimator().cancelAnimation (&pd, false);
+            pd.setTopLeftPosition (pos - grabOffset);
+
+            for (auto* c : cards)
+            {
+                if (c == &pd || ! c->targetBounds.contains (pos)) continue;
+                const auto from = std::find (cards.begin(), cards.end(), &pd);
+                const auto to = std::find (cards.begin(), cards.end(), c);
+                const auto idx = (size_t) std::distance (cards.begin(), to);
+                cards.erase (from);
+                cards.insert (cards.begin() + (long) idx, &pd);
+                layoutCards (true);
+                break;
+            }
+        };
+        ped->onDragEnd = [this] (Pedal& pd, const juce::MouseEvent&)
+        {
+            pd.setAlpha (1.0f);
+            dragging = nullptr;
+            layoutCards (true);
+            commitOrder();
+            repaint();
+        };
+    }
+
+    // Utility pedals (fixed position, not part of the chain)
+    pTuner = new Pedal (proc.apvts, "Tuner", cOut, TunerOn, -1, { TunerRef }, "Mutes the output while on");
+    pOut   = new Pedal (proc.apvts, "Output", cOut, -1, -1, { InGain, Master, OutGain }, "Levels");
+    for (auto* u : { pTuner, pOut })
+    {
+        addAndMakeVisible (u);
+        pedals.emplace_back (u);
+    }
+    pTuner->setDesiredWidth (250);
+
+    // Tuner display
+    pTuner->addAndMakeVisible (tunerView);
+    pTuner->onLayoutBody = [this] (juce::Rectangle<int> body)
+    {
+        tunerView.setBounds (body.removeFromTop ((int) ((float) body.getHeight() * 0.56f)));
+        return body;
     };
 
-    pGate   = make ("Noise Gate", cDyn,   GateOn,  -1,        { GateThr },                         "Dynamics");
-    pComp   = make ("Compressor", cDyn,   CompOn,  -1,        { CompAmt, CompLvl, CompAtk },       "Dynamics / Sustain");
-    pWah    = make ("Wah",        cFilt,  WahOn,   WahMode,   { WahPos, WahQ },                    "Filter");
-    pPitch  = make ("Pitch",      cPitch, PitchOn, PitchType, { PitchShift, PitchMix },            "Pitch");
-    pBoost  = make ("Boost",      cGain,  BoostOn, BoostType, { BoostGain },                       "Gain / EQ boost");
-    pDrive  = make ("Drive",      cGain,  DrvOn,   DrvType,   { DrvDrive, DrvTone, DrvLevel },     "Gain");
-    pAmp    = make ("Amp",        cAmp,   AmpOn,   -1,        { AmpGain, AmpBass, AmpMid, AmpTreble, AmpPres }, "Preamp + power stage");
-    pCab    = make ("Cabinet",    cAmp,   CabOn,   CabType,   {},                                  "Speaker / IR");
-    pEq     = make ("EQ",         cEq,    EqOn,    -1,        { EqLow, EqLowMid, EqHiMid, EqHigh }, "4-band parametric");
-    pMod1   = make ("Mod 1",      cMod,   M1On,    M1Type,    { M1Rate, M1Depth, M1Mix },          "Modulation");
-    pMod2   = make ("Mod 2",      cMod,   M2On,    M2Type,    { M2Rate, M2Depth, M2Mix },          "Modulation");
-    pLofi   = make ("Lo-Fi",      cLofi,  LoOn,    -1,        { LoBits, LoRate, LoMix },           "Bitcrusher / Sample rate");
-    pDelay  = make ("Delay",      cTime,  DlyOn,   DlyType,   { DlyTime, DlyFb, DlyMix },          "Echo");
-    pReverb = make ("Reverb",     cTime,  RevOn,   RevType,   { RevSize, RevMix },                 "Space");
-    pOut    = make ("Output",     cOut,   -1,      -1,        { InGain, Master, OutGain },         "Levels");
-
-    // Cabinet: IR loader lives inside the cab pedal.
-    pCab->addAndMakeVisible (irButton);
-    pCab->addChildComponent (irClear);
+    // Cabinet: IR loader lives inside the cab pedal
+    auto* cabPedal = bySlot[SCab];
+    cabPedal->addAndMakeVisible (irButton);
+    cabPedal->addChildComponent (irClear);
     irButton.onClick = [this] { chooseIR(); };
     irClear.onClick = [this] { proc.clearIR(); timerCallback(); };
-    pCab->onLayoutBody = [this] (juce::Rectangle<int> body)
+    cabPedal->onLayoutBody = [this] (juce::Rectangle<int> body)
     {
-        auto row = body.withTrimmedTop (14).removeFromTop (28).reduced (6, 0);
+        auto row = body.withTrimmedTop (4).removeFromTop (28).reduced (6, 0);
         irClear.setBounds (row.removeFromRight (28));
         row.removeFromRight (4);
         irButton.setBounds (row);
+        return juce::Rectangle<int>();
     };
-    pCab->resized();
 
-    strip = std::make_unique<ChainStrip> (proc, std::vector<ChainStrip::Item> {
-        { "In", -1, cOut },
-        { "Gate", GateOn, cDyn },   { "Comp", CompOn, cDyn },   { "Wah", WahOn, cFilt },
-        { "Pitch", PitchOn, cPitch }, { "Boost", BoostOn, cGain }, { "Drive", DrvOn, cGain },
-        { "Amp", AmpOn, cAmp },     { "Cab", CabOn, cAmp },     { "EQ", EqOn, cEq },
-        { "Mod 1", M1On, cMod },    { "Mod 2", M2On, cMod },    { "Lo-Fi", LoOn, cLofi },
-        { "Delay", DlyOn, cTime },  { "Reverb", RevOn, cTime }, { "Out", -1, cOut } });
+    // Looper: transport buttons
+    auto* lp = bySlot[SLooper];
+    lp->setDesiredWidth (330);
+    for (auto* b : { &loopRec, &loopPlay, &loopDub, &loopStop, &loopClearBtn, &loopUndoBtn })
+    {
+        lp->addAndMakeVisible (b);
+        b->getProperties().set ("accent", (int) cLoop.getARGB());
+    }
+    loopRec.getProperties().set ("accent", (int) cGlit.getARGB());
+    lp->addAndMakeVisible (loopBar);
+    loopRev.setButtonText ("REV");
+    loopRev.getProperties().set ("label", true);
+    lp->addAndMakeVisible (loopRev);
+    loopRevAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParams[LoopRev].id, loopRev);
+    loopRec.onClick  = [this] { setLoopMode (noir::Looper::Record); };
+    loopPlay.onClick = [this] { setLoopMode (noir::Looper::Play); };
+    loopDub.onClick  = [this] { setLoopMode (noir::Looper::Overdub); };
+    loopStop.onClick = [this] { setLoopMode (noir::Looper::Stop); };
+    loopClearBtn.onClick = [this] { proc.loopClear(); proc.setParamValue (LoopMode, 0.0f); };
+    loopUndoBtn.onClick  = [this] { proc.loopUndo(); };
+    lp->onLayoutBody = [this] (juce::Rectangle<int> body)
+    {
+        auto left = body.removeFromLeft ((int) ((float) body.getWidth() * 0.66f));
+        auto row1 = left.removeFromTop (26);
+        left.removeFromTop (4);
+        auto row2 = left.removeFromTop (26);
+        left.removeFromTop (8);
+        loopBar.setBounds (left.removeFromTop (10));
+
+        auto place = [] (juce::Rectangle<int> row, juce::Button& a, juce::Button& b, juce::Button& c)
+        {
+            const int w = row.getWidth() / 3;
+            a.setBounds (row.removeFromLeft (w).reduced (2, 0));
+            b.setBounds (row.removeFromLeft (w).reduced (2, 0));
+            c.setBounds (row.reduced (2, 0));
+        };
+        place (row1, loopRec, loopPlay, loopDub);
+        place (row2, loopStop, loopClearBtn, loopUndoBtn);
+
+        loopRev.setBounds (body.removeFromTop (24).reduced (8, 0));
+        return body;
+    };
+
+    for (int s = 0; s < NumSlots; ++s) cards.push_back (bySlot[s]);
+
+    strip = std::make_unique<ChainStrip> (proc, std::vector<juce::Colour> (std::begin (slotColour), std::end (slotColour)));
     addAndMakeVisible (*strip);
 
     // Header
@@ -382,7 +620,8 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     nextPreset.onClick = [step] { step (1); };
     allOn.onClick  = [this] { setAllEffects (true); };
     allOff.onClick = [this] { setAllEffects (false); };
-    for (auto* b : { &prevPreset, &nextPreset, &allOn, &allOff })
+    resetOrder.onClick = [this] { proc.setChainOrder (NoirProcessor::defaultOrder()); syncOrderFromProcessor(); };
+    for (auto* b : { &prevPreset, &nextPreset, &allOn, &allOff, &resetOrder })
         addAndMakeVisible (b);
 
     power.getProperties().set ("power", true);
@@ -390,27 +629,46 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     addAndMakeVisible (power);
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParams[Power].id, power);
 
-    setSize (1260, 760);
+    // Apply the stored chain order before the first layout
+    {
+        const auto o = proc.getChainOrder();
+        cards.clear();
+        for (int s : o) cards.push_back (bySlot[s]);
+        strip->setOrder (o);
+    }
+
+    setResizable (true, true);
+    setResizeLimits (1100, 700, 2400, 1300);
+    setSize (1500, 880);
     startTimerHz (30);
     timerCallback();
 }
 
 NoirEditor::~NoirEditor()
 {
+    juce::Desktop::getInstance().getAnimator().cancelAllAnimations (false);
     setLookAndFeel (nullptr);
 }
 
 void NoirEditor::setAllEffects (bool on)
 {
-    static const Id switches[] = { GateOn, CompOn, WahOn, PitchOn, BoostOn, DrvOn, AmpOn, CabOn, EqOn,
-                                   M1On, M2On, LoOn, DlyOn, RevOn };
-    for (auto id : switches)
-        if (auto* p = proc.param (id))
+    for (int s = 0; s < NumSlots; ++s)
+        if (auto* p = proc.param (kSlotOn[s]))
         {
             p->beginChangeGesture();
             p->setValueNotifyingHost (on ? 1.0f : 0.0f);
             p->endChangeGesture();
         }
+}
+
+void NoirEditor::setLoopMode (int mode)
+{
+    const int current = (int) proc.apvts.getRawParameterValue (kParams[LoopMode].id)->load();
+    proc.setParamValue (LoopOn, 1.0f);
+    // pressing REC / DUB again closes the pass and starts playback
+    if (mode == current && (mode == noir::Looper::Record || mode == noir::Looper::Overdub))
+        mode = noir::Looper::Play;
+    proc.setParamValue (LoopMode, (float) mode);
 }
 
 void NoirEditor::chooseIR()
@@ -428,6 +686,31 @@ void NoirEditor::chooseIR()
                           });
 }
 
+void NoirEditor::commitOrder()
+{
+    NoirProcessor::Order o {};
+    for (size_t i = 0; i < cards.size(); ++i) o[i] = cards[i]->slot;
+    proc.setChainOrder (o);
+    strip->setOrder (o);
+}
+
+void NoirEditor::syncOrderFromProcessor()
+{
+    if (dragging != nullptr) return;
+
+    const auto o = proc.getChainOrder();
+    bool same = true;
+    for (size_t i = 0; i < cards.size(); ++i)
+        if (cards[i]->slot != o[i]) { same = false; break; }
+
+    strip->setOrder (o);
+    if (same) return;
+
+    cards.clear();
+    for (int s : o) cards.push_back (bySlot[s]);
+    layoutCards (true);
+}
+
 void NoirEditor::timerCallback()
 {
     const float ip = proc.inPeak.exchange (0.0f);
@@ -439,9 +722,31 @@ void NoirEditor::timerCallback()
     irButton.setButtonText (ir ? proc.getIRName() : "Load IR");
     irClear.setVisible (ir);
 
+    // Looper
+    const int mode = (int) proc.apvts.getRawParameterValue (kParams[LoopMode].id)->load();
+    const bool loopOn = proc.apvts.getRawParameterValue (kParams[LoopOn].id)->load() > 0.5f;
+    loopRec.setToggleState (loopOn && mode == 1, juce::dontSendNotification);
+    loopPlay.setToggleState (loopOn && mode == 2, juce::dontSendNotification);
+    loopDub.setToggleState (loopOn && mode == 3, juce::dontSendNotification);
+    loopStop.setToggleState (mode == 0, juce::dontSendNotification);
+    loopUndoBtn.setEnabled (proc.loopCanUndo.load());
+    loopBar.set (proc.loopProgress.load(), proc.loopHasData.load());
+
+    // Tuner
+    if (proc.apvts.getRawParameterValue (kParams[TunerOn].id)->load() > 0.5f)
+    {
+        const auto r = proc.getTuner().analyse();
+        tunerView.setReading (r.freq, proc.apvts.getRawParameterValue (kParams[TunerRef].id)->load());
+    }
+    else
+    {
+        tunerView.setReading (0.0f, 440.0f);
+    }
+
+    syncOrderFromProcessor();
     for (auto& p : pedals) p->refresh();
     strip->repaint();
-    repaint (headerArea.getRight() - 230, 10, 230, 40);
+    repaint (headerArea.getRight() - 260, 8, 260, 44);
 }
 
 //==============================================================================
@@ -463,6 +768,21 @@ void NoirEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (10.5f));
     g.drawText ("GUITAR  /  PEDALBOARD", 24, 50, 160, 12, juce::Justification::centredLeft);
 
+    // drop slot while dragging a pedal
+    if (dragging != nullptr)
+    {
+        const auto r = dragging->targetBounds.toFloat().reduced (1.0f);
+        g.setColour (NoirLookAndFeel::accent.withAlpha (0.07f));
+        g.fillRoundedRectangle (r, 9.0f);
+        juce::Path outline;
+        outline.addRoundedRectangle (r, 9.0f);
+        juce::Path dashed;
+        const float dashes[] = { 5.0f, 4.0f };
+        juce::PathStrokeType (1.2f).createDashedStroke (dashed, outline, dashes, 2);
+        g.setColour (NoirLookAndFeel::accent.withAlpha (0.7f));
+        g.fillPath (dashed);
+    }
+
     auto drawMeter = [&] (juce::Rectangle<int> r, float level, const juce::String& name)
     {
         g.setColour (NoirLookAndFeel::dim);
@@ -479,20 +799,62 @@ void NoirEditor::paint (juce::Graphics& g)
     drawMeter (meterOut, outLevel, "OUT");
 }
 
-void NoirEditor::layoutRow (juce::Rectangle<int> row, std::vector<Pedal*> row_pedals)
+void NoirEditor::paintOverChildren (juce::Graphics&) {}
+
+void NoirEditor::layoutCards (bool animate)
 {
     const int gap = 10;
-    int total = 0;
-    for (auto* p : row_pedals) total += p->desiredWidth();
-    const float scale = (float) (row.getWidth() - gap * ((int) row_pedals.size() - 1)) / (float) total;
+    std::vector<Pedal*> flow (cards.begin(), cards.end());
+    flow.push_back (pTuner);
+    flow.push_back (pOut);
 
-    int x = row.getX();
-    for (size_t i = 0; i < row_pedals.size(); ++i)
+    std::vector<std::vector<Pedal*>> rows;
+    int sum = 0;
+    for (auto* p : flow)
     {
-        const int w = (i + 1 == row_pedals.size()) ? row.getRight() - x
-                                                    : (int) std::floor ((float) row_pedals[i]->desiredWidth() * scale);
-        row_pedals[i]->setBounds (x, row.getY(), w, row.getHeight());
-        x += w + gap;
+        const int w = p->desiredWidth();
+        if (! rows.empty() && sum + gap + w <= gridArea.getWidth()) { rows.back().push_back (p); sum += gap + w; }
+        else { rows.push_back ({ p }); sum = w; }
+    }
+
+    const int nRows = (int) rows.size();
+    const int rowH = juce::jlimit (150, 215, (gridArea.getHeight() - gap * (nRows - 1)) / juce::jmax (1, nRows));
+
+    int y = gridArea.getY();
+    for (int r = 0; r < nRows; ++r)
+    {
+        auto& row = rows[(size_t) r];
+        int total = 0;
+        for (auto* p : row) total += p->desiredWidth();
+        const int avail = gridArea.getWidth() - gap * ((int) row.size() - 1);
+        const bool last = r == nRows - 1;
+        const float scale = last ? juce::jmin (1.15f, (float) avail / (float) total) : (float) avail / (float) total;
+
+        int x = gridArea.getX();
+        for (size_t i = 0; i < row.size(); ++i)
+        {
+            const bool lastInRow = i + 1 == row.size();
+            const int w = (! last && lastInRow) ? gridArea.getRight() - x
+                                                : (int) std::floor ((float) row[i]->desiredWidth() * scale);
+            row[i]->targetBounds = { x, y, w, rowH };
+            x += w + gap;
+        }
+        y += rowH + gap;
+    }
+
+    auto& animator = juce::Desktop::getInstance().getAnimator();
+    for (auto* p : flow)
+    {
+        if (p == dragging) continue;
+        if (p->getBounds() == p->targetBounds) continue;
+
+        if (animate && p->getWidth() > 0)
+            animator.animateComponent (p, p->targetBounds, 1.0f, 150, false, 1.0, 1.0);
+        else
+        {
+            animator.cancelAnimation (p, false);
+            p->setBounds (p->targetBounds);
+        }
     }
 }
 
@@ -506,9 +868,11 @@ void NoirEditor::resized()
         auto h = headerArea;
         h.removeFromLeft (200);
 
-        auto right = h.removeFromRight (440);
+        auto right = h.removeFromRight (640);
         power.setBounds (right.removeFromRight (110).withSizeKeepingCentre (110, 28));
         right.removeFromRight (10);
+        resetOrder.setBounds (right.removeFromRight (104).withSizeKeepingCentre (104, 28));
+        right.removeFromRight (6);
         allOff.setBounds (right.removeFromRight (74).withSizeKeepingCentre (74, 28));
         right.removeFromRight (6);
         allOn.setBounds (right.removeFromRight (64).withSizeKeepingCentre (64, 28));
@@ -528,14 +892,9 @@ void NoirEditor::resized()
     }
 
     area.removeFromTop (6);
-    strip->setBounds (area.removeFromTop (34));
+    strip->setBounds (area.removeFromTop (32));
     area.removeFromTop (12);
 
-    const int gap = 10;
-    const int rowH = (area.getHeight() - 2 * gap) / 3;
-    layoutRow (area.removeFromTop (rowH), { pGate, pComp, pWah, pPitch, pBoost, pDrive });
-    area.removeFromTop (gap);
-    layoutRow (area.removeFromTop (rowH), { pAmp, pCab, pEq, pMod1 });
-    area.removeFromTop (gap);
-    layoutRow (area, { pMod2, pLofi, pDelay, pReverb, pOut });
+    gridArea = area;
+    layoutCards (false);
 }

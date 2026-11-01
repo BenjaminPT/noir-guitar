@@ -4,7 +4,7 @@
 #include <iterator>
 
 // Single source of truth for every parameter: the processor, the editor and the presets all use this table.
-enum Fmt { Num, Db, Pct, Ms, Gate, Semi };
+enum Fmt { Num, Db, Pct, Ms, Gate, Semi, Hz };
 
 enum Id
 {
@@ -23,6 +23,13 @@ enum Id
     LoOn, LoBits, LoRate, LoMix,
     DlyOn, DlyType, DlyTime, DlyFb, DlyMix,
     RevOn, RevType, RevSize, RevMix,
+    LoopOn, LoopMode, LoopLevel, LoopSpeed, LoopRev,
+    VocOn, VocSens, VocBright, VocMix,
+    TbOn, TbVowel, TbAuto, TbRes, TbMix,
+    GrOn, GrSize, GrDens, GrPitch, GrSpread, GrMix,
+    FrzOn, FrzSize, FrzMix,
+    GltOn, GltMode, GltLen, GltAmt, GltMix,
+    TunerOn, TunerRef,
     NumParams
 };
 
@@ -109,7 +116,7 @@ inline const ParamInfo kParams[NumParams] = {
     PF ("lo_mix", "Mix", 0.0f, 1.0f, 1.0f, Pct),
 
     PB ("dly_on", "Delay On", 0.0f),
-    PC ("dly_type", "Delay Type", "Digital|Analog|Tape|Slapback|Ping-Pong", 2.0f),
+    PC ("dly_type", "Delay Type", "Digital|Analog|Tape|Slapback|Ping-Pong|Reverse|Multi-Tap", 2.0f),
     { "dly_time", "Time", 0, 40.0f, 1000.0f, 380.0f, nullptr, Ms, 0.5f },
     PF ("dly_fb", "Repeats", 0.0f, 0.9f, 0.3f, Pct),
     PF ("dly_mix", "Mix", 0.0f, 1.0f, 0.3f, Pct),
@@ -118,6 +125,43 @@ inline const ParamInfo kParams[NumParams] = {
     PC ("rev_type", "Reverb Type", "Room|Hall|Plate|Spring|Shimmer", 1.0f),
     PF ("rev_size", "Size", 0.0f, 1.0f, 0.5f, Pct),
     PF ("rev_mix", "Mix", 0.0f, 1.0f, 0.3f, Pct),
+
+    PB ("loop_on", "Looper On", 0.0f),
+    PC ("loop_mode", "Looper Mode", "Stop|Record|Play|Overdub", 0.0f),
+    PF ("loop_level", "Level", -12.0f, 6.0f, 0.0f, Db),
+    PC ("loop_speed", "Looper Speed", "Half|Normal|Double", 1.0f),
+    PB ("loop_rev", "Reverse", 0.0f),
+
+    PB ("voc_on", "Vocoder On", 0.0f),
+    PF ("voc_sens", "Sens", 0.0f, 1.0f, 0.5f, Pct),
+    PF ("voc_bright", "Sibilance", 0.0f, 1.0f, 0.4f, Pct),
+    PF ("voc_mix", "Mix", 0.0f, 1.0f, 1.0f, Pct),
+
+    PB ("tb_on", "Talk Box On", 0.0f),
+    PF ("tb_vowel", "Vowel", 0.0f, 1.0f, 0.3f, Pct),
+    PF ("tb_auto", "Auto", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("tb_res", "Resonance", 0.0f, 1.0f, 0.5f, Pct),
+    PF ("tb_mix", "Mix", 0.0f, 1.0f, 1.0f, Pct),
+
+    PB ("gr_on", "Granular On", 0.0f),
+    { "gr_size", "Size", 0, 20.0f, 400.0f, 120.0f, nullptr, Ms, 0.5f },
+    PF ("gr_dens", "Density", 0.0f, 1.0f, 0.5f, Pct),
+    PF ("gr_pitch", "Pitch", -12.0f, 12.0f, 0.0f, Semi),
+    PF ("gr_spread", "Scatter", 0.0f, 1.0f, 0.3f, Pct),
+    PF ("gr_mix", "Mix", 0.0f, 1.0f, 0.5f, Pct),
+
+    PB ("frz_on", "Freeze On", 0.0f),
+    { "frz_size", "Size", 0, 60.0f, 400.0f, 150.0f, nullptr, Ms, 0.5f },
+    PF ("frz_mix", "Level", 0.0f, 1.0f, 0.8f, Pct),
+
+    PB ("glt_on", "Glitch On", 0.0f),
+    PC ("glt_mode", "Glitch Mode", "Stutter|Glitch", 0.0f),
+    { "glt_len", "Length", 0, 20.0f, 500.0f, 125.0f, nullptr, Ms, 0.5f },
+    PF ("glt_amt", "Amount", 0.0f, 1.0f, 0.5f, Pct),
+    PF ("glt_mix", "Mix", 0.0f, 1.0f, 1.0f, Pct),
+
+    PB ("tuner_on", "Tuner On", 0.0f),
+    PF ("tuner_ref", "A4", 430.0f, 450.0f, 440.0f, Hz),
 };
 
 #undef PF
@@ -136,7 +180,23 @@ inline juce::String formatParam (Fmt f, float v)
         case Pct:  return juce::String (juce::roundToInt (v * 100.0f)) + "%";
         case Ms:   return juce::String (juce::roundToInt (v)) + " ms";
         case Semi: return (v > 0 ? "+" : "") + juce::String (v, 1) + " st";
+        case Hz:   return juce::String (v, 0) + " Hz";
         case Gate: return v <= -89.5f ? juce::String ("Off") : juce::String (v, 0) + " dB";
         default:   return juce::String (v, 1);
     }
 }
+
+//==============================================================================
+// Pedals that take part in the reorderable signal chain (default order = enum order below).
+enum Slot
+{
+    SGate, SComp, SWah, SPitch, SBoost, SDrive, SAmp, SCab, SEq, STalk, SVoc,
+    SMod1, SMod2, SLofi, SGlitch, SGran, SFreeze, SDelay, SReverb, SLooper,
+    NumSlots
+};
+
+inline constexpr Id kSlotOn[NumSlots] = { GateOn, CompOn, WahOn, PitchOn, BoostOn, DrvOn, AmpOn, CabOn, EqOn, TbOn, VocOn,
+                                          M1On, M2On, LoOn, GltOn, GrOn, FrzOn, DlyOn, RevOn, LoopOn };
+
+inline constexpr const char* kSlotShort[NumSlots] = { "Gate", "Comp", "Wah", "Pitch", "Boost", "Drive", "Amp", "Cab", "EQ", "Talk", "Voc",
+                                                       "Mod 1", "Mod 2", "Lo-Fi", "Glitch", "Grain", "Freeze", "Delay", "Reverb", "Loop" };

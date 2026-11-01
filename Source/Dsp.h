@@ -51,6 +51,13 @@ struct Biquad
         set ((1.0 + c) * 0.5, -(1.0 + c), (1.0 + c) * 0.5, 1.0 + al, -2.0 * c, 1.0 - al);
     }
 
+    void bandpass (double sr, double f, double q) noexcept   // constant 0 dB peak gain
+    {
+        const double w = 2.0 * kPi * clampFreq (f, sr) / sr;
+        const double c = std::cos (w), s = std::sin (w), al = s / (2.0 * q);
+        set (al, 0.0, -al, 1.0 + al, -2.0 * c, 1.0 - al);
+    }
+
     void peaking (double sr, double f, double q, double dB) noexcept
     {
         const double A = std::pow (10.0, dB / 40.0);

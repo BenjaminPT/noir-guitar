@@ -492,13 +492,13 @@ private:
 class TimeDelay
 {
 public:
-    enum Type { Digital, Analog, Tape, Slapback, PingPong };
+    enum Type { Digital, Analog, Tape, Slapback, PingPong, Reverse, MultiTap };
 
     void prepare (double sampleRate)
     {
         sr = sampleRate;
-        lineL.prepare ((int) (sr * 1.1) + 16);
-        lineR.prepare ((int) (sr * 1.1) + 16);
+        lineL.prepare ((int) (sr * 1.7) + 16);
+        lineR.prepare ((int) (sr * 1.7) + 16);
         timeSm.reset (sr, 0.12);
         mixSm.reset (sr, 0.03);
         timeSm.setCurrentAndTargetValue (350.0f);
@@ -527,11 +527,14 @@ public:
                 case Tape:     lp = 3800.0; hp = 200.0; modDepth = 0.0015; modRate = 0.45; sat = true; break;
                 case Slapback: lp = 6000.0; hp = 120.0; modDepth = 0.0;    modRate = 0.0; sat = false; break;
                 case PingPong: lp = 5000.0; hp = 120.0; modDepth = 0.0004; modRate = 0.5; sat = false; break;
+                case Reverse:  lp = 5500.0; hp = 120.0; modDepth = 0.0; modRate = 0.0; sat = true;  break;
+                case MultiTap: lp = 6500.0; hp = 120.0; modDepth = 0.0; modRate = 0.0; sat = false; break;
                 default:       modDepth = 0.0; modRate = 0.0; sat = false; break;
             }
             lpL.lowpass (sr, lp, 0.707); lpR.lowpass (sr, lp, 0.707);
             hpL.highpass (sr, hp, 0.707); hpR.highpass (sr, hp, 0.707);
             lfoInc = 2.0 * kPi * modRate / sr;
+            revPhase = 0.0;
         }
 
         float tm = timeMs;
@@ -554,8 +557,36 @@ public:
         lfo += lfoInc;
         if (lfo > 2.0 * kPi) lfo -= 2.0 * kPi;
 
-        const float dL = lineL.read (base + mod * std::sin (lfo));
-        const float dR = lineR.read (base + mod * std::sin (lfo + 2.1));
+        float dL, dR;
+        if (type == Reverse)
+        {
+            // pitch-shifter style crossfaded read head running backwards at 1x
+            const double W = juce::jmax (64.0, base);
+            revPhase += 2.0 / W;
+            revPhase -= std::floor (revPhase);
+            const double p2 = revPhase + 0.5 - std::floor (revPhase + 0.5);
+            const float s1 = (float) std::sin (kPi * revPhase);
+            const float w1 = s1 * s1;
+            dL = lineL.read (revPhase * W) * w1 + lineL.read (p2 * W) * (1.0f - w1);
+            dR = lineR.read (revPhase * W) * w1 + lineR.read (p2 * W) * (1.0f - w1);
+        }
+        else if (type == MultiTap)
+        {
+            static const double tl[4] = { 0.50, 0.75, 1.00, 1.50 }, tr[4] = { 0.375, 0.625, 0.875, 1.25 };
+            static const float gl[4] = { 0.55f, 0.50f, 0.80f, 0.45f }, gr[4] = { 0.50f, 0.55f, 0.75f, 0.50f };
+            dL = dR = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                dL += gl[i] * lineL.read (base * tl[i]);
+                dR += gr[i] * lineR.read (base * tr[i]);
+            }
+            dL *= 0.6f; dR *= 0.6f;
+        }
+        else
+        {
+            dL = lineL.read (base + mod * std::sin (lfo));
+            dR = lineR.read (base + mod * std::sin (lfo + 2.1));
+        }
 
         float fbL = lpL.process (hpL.process (type == PingPong ? dR : dL));
         float fbR = lpR.process (hpR.process (type == PingPong ? dL : dR));
@@ -578,7 +609,7 @@ public:
     }
 
 private:
-    double sr = 44100.0, lfo = 0.0, lfoInc = 0.0, modDepth = 0.0, modRate = 0.0;
+    double sr = 44100.0, lfo = 0.0, lfoInc = 0.0, modDepth = 0.0, modRate = 0.0, revPhase = 0.0;
     int type = -1;
     bool sat = false;
     DelayLine lineL, lineR;
