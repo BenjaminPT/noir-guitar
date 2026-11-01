@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 #include "PluginProcessor.h"
+#include "DawPanel.h"
 
 // Minimal dark look; every pedal category gets its own muted accent colour.
 class NoirLookAndFeel : public juce::LookAndFeel_V4
@@ -79,6 +80,7 @@ public:
     int slot = -1;                        // >= 0: takes part in the reorderable chain
     juce::Rectangle<int> targetBounds;    // where the editor wants this card to be
     std::function<void (Pedal&, const juce::MouseEvent&)> onDragStart, onDragMove, onDragEnd;
+    std::function<void (Id)> onContextMenu;   // right-click on a control: MIDI learn / macro assignment
 
 private:
     struct Knob
@@ -97,6 +99,7 @@ private:
     juce::ToggleButton led;
     juce::ComboBox type;
     std::vector<std::unique_ptr<Knob>> knobs;
+    std::vector<std::pair<juce::Component*, Id>> controls;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> ledAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAtt;
 
@@ -143,6 +146,8 @@ private:
     void syncOrderFromProcessor();
     void commitOrder();
     void setLoopMode (int mode);
+    void showParamMenu (Id id);
+    void setTab (int tab);
 
     Pedal* makePedal (int slot);
 
@@ -159,6 +164,9 @@ private:
     juce::Rectangle<int> gridArea;
 
     juce::ComboBox presetBox;
+    juce::TextButton tabBoard { "BOARD" }, tabDaw { "DAW" }, cancelLearn { "CANCEL" };
+    std::unique_ptr<DawPanel> daw;
+    int currentTab = 0;
     juce::TextButton prevPreset { "<" }, nextPreset { ">" }, allOn { "ALL ON" }, allOff { "ALL OFF" }, resetOrder { "RESET ORDER" };
     juce::ToggleButton power;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt;

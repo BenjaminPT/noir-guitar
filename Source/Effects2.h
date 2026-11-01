@@ -41,6 +41,19 @@ public:
     float progress() const noexcept { return length > 0 ? (float) (posD / (double) length) : 0.0f; }
     bool canUndo() const noexcept { return undoReady; }
 
+    void setQuantize (double samplesPerBar) noexcept { quantSamples = samplesPerBar; }
+
+    // Lock the loop position to the host timeline (seconds since the host's start) while playing at 1x.
+    void syncTo (double seconds) noexcept
+    {
+        if (length <= 0 || (mode != Play && mode != Overdub)) return;
+        double t = std::fmod (seconds * sr, (double) length);
+        if (t < 0.0) t += (double) length;
+        double d = std::abs (t - posD);
+        d = juce::jmin (d, (double) length - d);
+        if (d > 256.0) posD = t;
+    }
+
     void clear() noexcept { length = 0; posD = 0.0; mode = Stop; undoReady = false; dubbing = false; }
 
     void setMode (int m) noexcept
@@ -56,7 +69,14 @@ public:
         {
             const int len = (int) posD;
             if (len < (int) (0.1 * sr)) { length = 0; mode = Stop; posD = 0.0; return; }
-            length = len; posD = 0.0;
+            int newLen = len;
+            if (quantSamples > 0.0)
+            {
+                const double bars = juce::jmax (1.0, std::round ((double) len / quantSamples));
+                newLen = (int) juce::jmin ((double) maxLen, bars * quantSamples);
+                for (int i = len; i < newLen; ++i) { bufL[(size_t) i] = 0.0f; bufR[(size_t) i] = 0.0f; }
+            }
+            length = newLen; posD = 0.0;
             mode = m;
             if (m == Overdub) beginDub();
         }
@@ -138,7 +158,7 @@ public:
 private:
     void beginDub() noexcept { dubbing = true; undoCopied = 0; undoReady = false; }
 
-    double sr = 44100.0, posD = 0.0;
+    double sr = 44100.0, posD = 0.0, quantSamples = 0.0;
     int maxLen = 0, length = 0, mode = Stop, undoCopied = 0;
     bool undoReady = false, dubbing = false;
     std::vector<float> bufL, bufR, undoL, undoR;

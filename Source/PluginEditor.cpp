@@ -37,6 +37,8 @@ NoirLookAndFeel::NoirLookAndFeel()
     setColour (juce::PopupMenu::highlightedTextColourId, accent);
     setColour (juce::TextButton::textColourOffId, dim);
     setColour (juce::TextButton::textColourOnId, text);
+    setColour (juce::ListBox::textColourId, text);
+    setColour (juce::ScrollBar::thumbColourId, line.brighter (0.2f));
 }
 
 void NoirLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -214,6 +216,7 @@ Pedal::Pedal (juce::AudioProcessorValueTreeState& s, const juce::String& t, juce
         led.setMouseCursor (juce::MouseCursor::PointingHandCursor);
         addAndMakeVisible (led);
         ledAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, kParams[onId].id, led);
+        controls.push_back ({ &led, (Id) onId });
     }
 
     if (typeId >= 0)
@@ -221,6 +224,7 @@ Pedal::Pedal (juce::AudioProcessorValueTreeState& s, const juce::String& t, juce
         type.addItemList (juce::StringArray::fromTokens (kParams[typeId].choices, "|", ""), 1);
         addAndMakeVisible (type);
         typeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, kParams[typeId].id, type);
+        controls.push_back ({ &type, (Id) typeId });
     }
 
     for (auto id : knobIds)
@@ -240,8 +244,12 @@ Pedal::Pedal (juce::AudioProcessorValueTreeState& s, const juce::String& t, juce
         addAndMakeVisible (k->slider);
         addAndMakeVisible (k->label);
         k->attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, info.id, k->slider);
+        controls.push_back ({ &k->slider, id });
         knobs.push_back (std::move (k));
     }
+
+    for (auto& c : controls)
+        c.first->addMouseListener (this, false);
 }
 
 int Pedal::desiredWidth() const
@@ -339,23 +347,36 @@ void Pedal::resized()
 
 void Pedal::mouseMove (const juce::MouseEvent& e)
 {
+    if (e.eventComponent != this) return;
     setMouseCursor (slot >= 0 && e.y < 38 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
 }
 
 void Pedal::mouseDown (const juce::MouseEvent& e)
 {
-    dragArmed = slot >= 0 && e.y < 38 && ! e.mods.isPopupMenu();
+    if (e.mods.isPopupMenu())
+    {
+        for (auto& c : controls)
+            if (e.eventComponent == c.first || e.originalComponent == c.first)
+            {
+                if (onContextMenu) onContextMenu (c.second);
+                return;
+            }
+        return;
+    }
+
+    if (e.eventComponent != this) return;   // left-clicks on child controls are handled by the controls themselves
+    dragArmed = slot >= 0 && e.y < 38;
     if (dragArmed && onDragStart) onDragStart (*this, e);
 }
 
 void Pedal::mouseDrag (const juce::MouseEvent& e)
 {
-    if (dragArmed && onDragMove) onDragMove (*this, e);
+    if (e.eventComponent == this && dragArmed && onDragMove) onDragMove (*this, e);
 }
 
 void Pedal::mouseUp (const juce::MouseEvent& e)
 {
-    if (dragArmed)
+    if (e.eventComponent == this && dragArmed)
     {
         dragArmed = false;
         if (onDragEnd) onDragEnd (*this, e);
@@ -629,6 +650,24 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     addAndMakeVisible (power);
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParams[Power].id, power);
 
+    for (auto& pd : pedals)
+        pd->onContextMenu = [this] (Id id) { showParamMenu (id); };
+
+    // DAW tab + header tabs
+    daw = std::make_unique<DawPanel> (proc);
+    addChildComponent (*daw);
+    tabBoard.setClickingTogglesState (false);
+    tabDaw.setClickingTogglesState (false);
+    tabBoard.getProperties().set ("accent", (int) cGain.getARGB());
+    tabDaw.getProperties().set ("accent", (int) cMod.getARGB());
+    tabBoard.onClick = [this] { setTab (0); };
+    tabDaw.onClick   = [this] { setTab (1); };
+    cancelLearn.onClick = [this] { proc.cancelMidiLearn(); };
+    addAndMakeVisible (tabBoard);
+    addAndMakeVisible (tabDaw);
+    addChildComponent (cancelLearn);
+    tabBoard.setToggleState (true, juce::dontSendNotification);
+
     // Apply the stored chain order before the first layout
     {
         const auto o = proc.getChainOrder();
@@ -638,7 +677,7 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     }
 
     setResizable (true, true);
-    setResizeLimits (1100, 700, 2400, 1300);
+    setResizeLimits (1350, 700, 2400, 1300);
     setSize (1500, 880);
     startTimerHz (30);
     timerCallback();
@@ -684,6 +723,45 @@ void NoirEditor::chooseIR()
                                   proc.loadIR (f);
                               timerCallback();
                           });
+}
+
+void NoirEditor::setTab (int tab)
+{
+    currentTab = tab;
+    const bool board = tab == 0;
+    tabBoard.setToggleState (board, juce::dontSendNotification);
+    tabDaw.setToggleState (! board, juce::dontSendNotification);
+
+    strip->setVisible (board);
+    for (auto& p : pedals) p->setVisible (board);
+    for (auto* b : { &allOn, &allOff, &resetOrder }) b->setVisible (board);
+    daw->setVisible (! board);
+    repaint();
+}
+
+void NoirEditor::showParamMenu (Id id)
+{
+    juce::PopupMenu menu, macroMenu;
+    menu.addSectionHeader (paramLabel (id));
+
+    const int cc = proc.getCcFor (id);
+    menu.addItem (1, "MIDI Learn  (then move a CC / footswitch)");
+    if (cc >= 0) menu.addItem (2, "Clear MIDI mapping  (CC " + juce::String (cc) + ")");
+
+    for (int m = 0; m < NoirProcessor::NumMacros; ++m)
+        macroMenu.addItem (100 + m, "Macro " + juce::String (m + 1));
+    menu.addSubMenu ("Assign to Macro", macroMenu, id < Macro1);
+
+    menu.addSeparator();
+    menu.addItem (3, "Reset to default");
+
+    menu.showMenuAsync (juce::PopupMenu::Options(), [this, id] (int result)
+    {
+        if (result == 1) proc.startMidiLearn (id);
+        else if (result == 2) proc.clearMidiFor (id);
+        else if (result == 3) proc.setParamValue (id, kParams[id].def);
+        else if (result >= 100) proc.assignMacro (result - 100, id);
+    });
 }
 
 void NoirEditor::commitOrder()
@@ -743,10 +821,14 @@ void NoirEditor::timerCallback()
         tunerView.setReading (0.0f, 440.0f);
     }
 
+    const int learning = proc.getLearnTarget();
+    if (cancelLearn.isVisible() != (learning >= 0)) { cancelLearn.setVisible (learning >= 0); resized(); }
+
     syncOrderFromProcessor();
     for (auto& p : pedals) p->refresh();
     strip->repaint();
     repaint (headerArea.getRight() - 260, 8, 260, 44);
+    if (proc.getLearnTarget() >= 0 || cancelLearn.isVisible()) repaint (headerArea);
 }
 
 //==============================================================================
@@ -797,6 +879,14 @@ void NoirEditor::paint (juce::Graphics& g)
     };
     drawMeter (meterIn, inLevel, "IN");
     drawMeter (meterOut, outLevel, "OUT");
+
+    if (const int learning = proc.getLearnTarget(); learning >= 0)
+    {
+        g.setColour (NoirLookAndFeel::accent);
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText ("MIDI LEARN  >  " + paramLabel (learning) + "   -   move a knob or press a footswitch",
+                    headerArea.withTrimmedLeft (380).withTrimmedRight (700), juce::Justification::centredLeft);
+    }
 }
 
 void NoirEditor::paintOverChildren (juce::Graphics&) {}
@@ -867,6 +957,10 @@ void NoirEditor::resized()
     {
         auto h = headerArea;
         h.removeFromLeft (200);
+        tabBoard.setBounds (h.removeFromLeft (76).withSizeKeepingCentre (72, 28));
+        h.removeFromLeft (4);
+        tabDaw.setBounds (h.removeFromLeft (76).withSizeKeepingCentre (72, 28));
+        h.removeFromLeft (12);
 
         auto right = h.removeFromRight (640);
         power.setBounds (right.removeFromRight (110).withSizeKeepingCentre (110, 28));
@@ -883,6 +977,7 @@ void NoirEditor::resized()
         meters.removeFromTop (6);
         meterOut = meters.removeFromTop (8).withTrimmedLeft (26);
 
+        cancelLearn.setBounds (h.removeFromRight (80).withSizeKeepingCentre (76, 28));
         auto mid = h.withSizeKeepingCentre (juce::jmin (h.getWidth(), 340), 28);
         prevPreset.setBounds (mid.removeFromLeft (30));
         mid.removeFromLeft (6);
@@ -892,6 +987,7 @@ void NoirEditor::resized()
     }
 
     area.removeFromTop (6);
+    daw->setBounds (area);
     strip->setBounds (area.removeFromTop (32));
     area.removeFromTop (12);
 

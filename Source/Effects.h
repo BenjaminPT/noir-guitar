@@ -335,12 +335,12 @@ public:
         xoLow.reset();
     }
 
-    void setParams (int t, float rate01, float depthV, float mixV)
+    void setParams (int t, float rate01, float depthV, float mixV, double hzOverride = -1.0)
     {
         if (t != type) { type = t; reset(); }
         static const double lo[NumTypes] = { 0.1, 0.05, 0.05, 1.0, 2.0, 0.5, 40.0 };
         static const double hi[NumTypes] = { 4.0, 2.0, 4.0, 12.0, 8.0, 7.0, 2000.0 };
-        rate = lo[t] * std::pow (hi[t] / lo[t], (double) rate01);
+        rate = hzOverride > 0.0 ? juce::jlimit (0.02, 40.0, hzOverride) : lo[t] * std::pow (hi[t] / lo[t], (double) rate01);
         depth = depthV;
         mix = mixV;
     }

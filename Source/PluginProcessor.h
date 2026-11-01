@@ -19,7 +19,7 @@ struct Pair
     template <class F> void each (F&& f) { f (c[0]); f (c[1]); }
 };
 
-class NoirProcessor : public juce::AudioProcessor
+class NoirProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
     NoirProcessor();
@@ -35,7 +35,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return "Noir Guitar"; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 3.0; }
@@ -74,6 +74,29 @@ public:
 
     noir::Tuner& getTuner() { return tuner; }
 
+    // ---- DAW integration ------------------------------------------------------------------------------
+    static constexpr int NumMacros = 8, LinksPerMacro = 8;
+
+    // MIDI learn: right-click a control -> "MIDI Learn", then move a CC on your controller / footswitch.
+    void startMidiLearn (Id id) { learnTarget.store ((int) id); }
+    void cancelMidiLearn() { learnTarget.store (-1); }
+    int getLearnTarget() const { return learnTarget.load(); }
+    int getCcFor (Id id) const;
+    void clearMidiFor (Id id);
+    void clearAllMidi();
+    std::array<int, 128> midiMapSnapshot() const;
+
+    // Macros: eight automatable knobs, each driving up to eight parameters over a [lo, hi] range.
+    struct LinkInfo { int param = -1; float lo = 0.0f, hi = 1.0f; };
+    bool assignMacro (int macro, Id param);
+    void unassignMacro (int macro, int linkIndex);
+    LinkInfo getLink (int macro, int linkIndex) const;
+    void setLinkRange (int macro, int linkIndex, float lo, float hi);
+
+    std::atomic<int> mapVersion { 0 };                       // bumped whenever MIDI map / macro links change
+    std::atomic<float> hostBpmShown { 0.0f };
+    std::atomic<bool> hostPlayingShown { false }, hostKnown { false };
+
     juce::AudioProcessorValueTreeState apvts;
 
     // Peak meters, written by the audio thread, read-and-cleared by the editor.
@@ -87,6 +110,11 @@ private:
     void resetEffects();
     void updateParams();
     void runSlot (int slot);
+    void readHost();
+    void handleMidi (juce::MidiBuffer&);
+    void applyMacros();
+    void handleAsyncUpdate() override;
+    void setParamNormalised (int index, float norm01);
     void makeStereo();
     void applyMaster();
 
@@ -102,10 +130,19 @@ private:
     mutable juce::SpinLock orderLock;
     Order sharedOrder = defaultOrder(), audioOrder = defaultOrder();
 
+    // DAW state
+    std::atomic<int> ccMap[128];
+    std::atomic<int> learnTarget { -1 }, pendingPreset { -1 };
+    struct Link { std::atomic<int> param { -1 }; std::atomic<float> lo { 0.0f }, hi { 1.0f }; };
+    Link links[NumMacros][LinksPerMacro];
+    float lastMacro[NumMacros] {};
+    double bpm = 120.0, hostPpq = 0.0, beatsPerBar = 4.0;
+    bool hostPlaying = false, lastHostPlaying = false, hostHasPpq = false;
+
     // Per-chunk working state
     float* chanL = nullptr;
     float* chanR = nullptr;
-    int blockN = 0;
+    int blockN = 0, chunkStart = 0;
     bool stereoSig = false;
 
     // Block-rate parameter copies used by the slot lambdas

@@ -4,7 +4,7 @@
 #include <iterator>
 
 // Single source of truth for every parameter: the processor, the editor and the presets all use this table.
-enum Fmt { Num, Db, Pct, Ms, Gate, Semi, Hz };
+enum Fmt { Num, Db, Pct, Ms, Gate, Semi, Hz, Bpm };
 
 enum Id
 {
@@ -30,6 +30,8 @@ enum Id
     FrzOn, FrzSize, FrzMix,
     GltOn, GltMode, GltLen, GltAmt, GltMix,
     TunerOn, TunerRef,
+    BpmManual, HostSync, DlySync, M1Sync, M2Sync, GltSync, LoopFollow, LoopQuant,
+    Macro1, Macro2, Macro3, Macro4, Macro5, Macro6, Macro7, Macro8,
     NumParams
 };
 
@@ -162,6 +164,24 @@ inline const ParamInfo kParams[NumParams] = {
 
     PB ("tuner_on", "Tuner On", 0.0f),
     PF ("tuner_ref", "A4", 430.0f, 450.0f, 440.0f, Hz),
+
+    PF ("bpm", "Manual BPM", 40.0f, 240.0f, 120.0f, Bpm),
+    PB ("host_sync", "Follow Host Tempo", 1.0f),
+    PC ("dly_sync", "Delay Sync", "Free|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16|1/16.|1/16T|1/32", 0.0f),
+    PC ("m1_sync", "Mod 1 Sync", "Free|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16|1/16.|1/16T|1/32", 0.0f),
+    PC ("m2_sync", "Mod 2 Sync", "Free|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16|1/16.|1/16T|1/32", 0.0f),
+    PC ("glt_sync", "Glitch Sync", "Free|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16|1/16.|1/16T|1/32", 0.0f),
+    PB ("loop_follow", "Follow DAW Transport", 0.0f),
+    PB ("loop_quant", "Quantize to Bars", 0.0f),
+
+    PF ("macro1", "Macro 1", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro2", "Macro 2", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro3", "Macro 3", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro4", "Macro 4", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro5", "Macro 5", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro6", "Macro 6", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro7", "Macro 7", 0.0f, 1.0f, 0.0f, Pct),
+    PF ("macro8", "Macro 8", 0.0f, 1.0f, 0.0f, Pct),
 };
 
 #undef PF
@@ -181,6 +201,7 @@ inline juce::String formatParam (Fmt f, float v)
         case Ms:   return juce::String (juce::roundToInt (v)) + " ms";
         case Semi: return (v > 0 ? "+" : "") + juce::String (v, 1) + " st";
         case Hz:   return juce::String (v, 0) + " Hz";
+        case Bpm:  return juce::String (v, 1) + " BPM";
         case Gate: return v <= -89.5f ? juce::String ("Off") : juce::String (v, 0) + " dB";
         default:   return juce::String (v, 1);
     }
@@ -200,3 +221,30 @@ inline constexpr Id kSlotOn[NumSlots] = { GateOn, CompOn, WahOn, PitchOn, BoostO
 
 inline constexpr const char* kSlotShort[NumSlots] = { "Gate", "Comp", "Wah", "Pitch", "Boost", "Drive", "Amp", "Cab", "EQ", "Talk", "Voc",
                                                        "Mod 1", "Mod 2", "Lo-Fi", "Glitch", "Grain", "Freeze", "Delay", "Reverb", "Loop" };
+
+// Number of beats (quarter notes) for each entry of the "Sync" choice lists (0 = free running).
+inline double syncBeats (int choice)
+{
+    static const double b[12] = { 0.0, 2.0, 1.0, 1.5, 2.0 / 3.0, 0.5, 0.75, 1.0 / 3.0, 0.25, 0.375, 1.0 / 6.0, 0.125 };
+    return b[juce::jlimit (0, 11, choice)];
+}
+
+// Human-readable label that includes the pedal name, e.g. "Drive / Tone".
+inline juce::String paramLabel (int i)
+{
+    struct R { Id first, last; const char* name; };
+    static const R ranges[] = {
+        { Power, Master, "Global" },   { GateOn, GateThr, "Gate" },    { CompOn, CompAtk, "Comp" },
+        { WahOn, WahQ, "Wah" },        { PitchOn, PitchMix, "Pitch" }, { BoostOn, BoostGain, "Boost" },
+        { DrvOn, DrvLevel, "Drive" },  { AmpOn, AmpPres, "Amp" },      { CabOn, CabType, "Cab" },
+        { EqOn, EqHigh, "EQ" },        { M1On, M1Mix, "Mod 1" },       { M2On, M2Mix, "Mod 2" },
+        { LoOn, LoMix, "Lo-Fi" },      { DlyOn, DlyMix, "Delay" },     { RevOn, RevMix, "Reverb" },
+        { LoopOn, LoopRev, "Looper" }, { VocOn, VocMix, "Vocoder" },   { TbOn, TbMix, "Talk Box" },
+        { GrOn, GrMix, "Granular" },   { FrzOn, FrzMix, "Freeze" },    { GltOn, GltMix, "Glitch" },
+        { TunerOn, TunerRef, "Tuner" }, { BpmManual, Macro8, "DAW" } };
+
+    for (const auto& r : ranges)
+        if (i >= (int) r.first && i <= (int) r.last)
+            return juce::String (r.name) + " / " + kParams[i].name;
+    return kParams[i].name;
+}

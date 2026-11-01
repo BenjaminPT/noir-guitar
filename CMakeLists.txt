@@ -19,7 +19,7 @@ juce_add_plugin(NoirGuitar
     FORMATS VST3 Standalone
     PRODUCT_NAME "Noir Guitar"
     IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     VST3_CATEGORIES Fx Distortion
     COPY_PLUGIN_AFTER_BUILD FALSE
@@ -28,7 +28,8 @@ juce_add_plugin(NoirGuitar
 
 target_sources(NoirGuitar PRIVATE
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/DawPanel.cpp)
 
 target_compile_definitions(NoirGuitar PUBLIC
     JUCE_WEB_BROWSER=0
