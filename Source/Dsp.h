@@ -196,7 +196,7 @@ public:
         y = mid.process (y);
         y = treble.process (y);
         y = pres.process (y);
-        return std::tanh (y * power);
+        return std::tanh (y * power) * 0.36f;   // level-matched: saturated peak ~ -9 dBFS before Master
     }
 
 private:
@@ -311,12 +311,36 @@ private:
     int mask = 0, w = 0;
 };
 
-// Gentle safety limiter so a wrong knob never hurts anyone's ears.
+struct OnePole
+{
+    float z = 0.0f, a = 0.1f;
+    void lp (double sr, double f) noexcept { a = 1.0f - (float) std::exp (-2.0 * kPi * f / sr); }
+    void reset() noexcept { z = 0.0f; }
+    inline float process (float x) noexcept { z += a * (x - z); return z; }
+};
+
+// Final safety stage: instant-attack peak limiter (ceiling -3 dBFS) + soft knee, so a wrong knob can never be painful.
 inline float softLimit (float x) noexcept
 {
     const float a = std::abs (x);
-    if (a <= 0.9f) return x;
-    const float y = 0.9f + 0.1f * std::tanh ((a - 0.9f) * 10.0f);
+    if (a <= 0.6f) return x;
+    const float y = 0.6f + 0.1f * std::tanh ((a - 0.6f) * 10.0f);
     return x < 0.0f ? -y : y;
 }
+
+class Limiter
+{
+public:
+    void prepare (double sr) noexcept { rel = (float) std::exp (-1.0 / (0.120 * sr)); g = 1.0f; }
+    void reset() noexcept { g = 1.0f; }
+    inline float gainFor (float peak) noexcept
+    {
+        const float target = peak > ceiling ? ceiling / peak : 1.0f;
+        if (target < g) g = target; else g = 1.0f + (g - 1.0f) * rel;
+        return g;
+    }
+private:
+    float g = 1.0f, rel = 0.999f;
+    const float ceiling = 0.66f;
+};
 } // namespace noir

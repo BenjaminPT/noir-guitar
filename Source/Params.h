@@ -30,7 +30,7 @@ enum Id
     FrzOn, FrzSize, FrzMix,
     GltOn, GltMode, GltLen, GltAmt, GltMix,
     TunerOn, TunerRef,
-    BpmManual, HostSync, DlySync, M1Sync, M2Sync, GltSync, LoopFollow, LoopQuant,
+    BpmManual, HostSync, DlySync, M1Sync, M2Sync, GltSync, LoopFollow, LoopQuant, LoopTrack, LoopMute1, LoopMute2, LoopMute3, LoopMute4,
     Macro1, Macro2, Macro3, Macro4, Macro5, Macro6, Macro7, Macro8,
     NumParams
 };
@@ -54,7 +54,7 @@ inline const ParamInfo kParams[NumParams] = {
     PB ("power", "Power", 1.0f),
     PF ("in",    "Input",  -24.0f, 24.0f, 0.0f, Db),
     PF ("out",   "Output", -24.0f, 12.0f, 0.0f, Db),
-    PF ("master","Master", -30.0f, 6.0f, -10.0f, Db),
+    PF ("master","Master", -30.0f, 6.0f, -8.0f, Db),
 
     PB ("gate_on", "Gate On", 1.0f),
     PF ("gate_thr", "Threshold", -90.0f, -30.0f, -72.0f, Gate),
@@ -79,7 +79,7 @@ inline const ParamInfo kParams[NumParams] = {
     PF ("boost_gain", "Gain", 0.0f, 20.0f, 6.0f, Db),
 
     PB ("drv_on", "Drive On", 1.0f),
-    PC ("drv_type", "Drive Type", "Overdrive|Distortion|Fuzz", 0.0f),
+    PC ("drv_type", "Drive Type", "Overdrive|Distortion|Fuzz|Big Muff|Metal|Octave Fuzz", 0.0f),
     PF ("drv_drive", "Drive", 0.0f, 1.0f, 0.35f, Pct),
     PF ("drv_tone", "Tone", 0.0f, 1.0f, 0.5f, Pct),
     PF ("drv_level", "Level", -12.0f, 12.0f, 0.0f, Db),
@@ -173,6 +173,11 @@ inline const ParamInfo kParams[NumParams] = {
     PC ("glt_sync", "Glitch Sync", "Free|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16|1/16.|1/16T|1/32", 0.0f),
     PB ("loop_follow", "Follow DAW Transport", 0.0f),
     PB ("loop_quant", "Quantize to Bars", 0.0f),
+    PC ("loop_track", "Looper Track", "Track 1|Track 2|Track 3|Track 4", 0.0f),
+    PB ("loop_m1", "Looper Mute 1", 0.0f),
+    PB ("loop_m2", "Looper Mute 2", 0.0f),
+    PB ("loop_m3", "Looper Mute 3", 0.0f),
+    PB ("loop_m4", "Looper Mute 4", 0.0f),
 
     PF ("macro1", "Macro 1", 0.0f, 1.0f, 0.0f, Pct),
     PF ("macro2", "Macro 2", 0.0f, 1.0f, 0.0f, Pct),
@@ -241,7 +246,7 @@ inline juce::String paramLabel (int i)
         { LoOn, LoMix, "Lo-Fi" },      { DlyOn, DlyMix, "Delay" },     { RevOn, RevMix, "Reverb" },
         { LoopOn, LoopRev, "Looper" }, { VocOn, VocMix, "Vocoder" },   { TbOn, TbMix, "Talk Box" },
         { GrOn, GrMix, "Granular" },   { FrzOn, FrzMix, "Freeze" },    { GltOn, GltMix, "Glitch" },
-        { TunerOn, TunerRef, "Tuner" }, { BpmManual, Macro8, "DAW" } };
+        { TunerOn, TunerRef, "Tuner" }, { LoopTrack, LoopMute4, "Looper" }, { BpmManual, Macro8, "DAW" } };
 
     for (const auto& r : ranges)
         if (i >= (int) r.first && i <= (int) r.last)

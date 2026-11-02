@@ -19,11 +19,11 @@ struct Pair
     template <class F> void each (F&& f) { f (c[0]); f (c[1]); }
 };
 
-class NoirProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
+class NoirProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     NoirProcessor();
-    ~NoirProcessor() override = default;
+    ~NoirProcessor() override { stopTimer(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -67,24 +67,53 @@ public:
     void setChainOrder (const Order& o);
 
     // Looper controls (message thread -> audio thread)
-    void loopClear() { clearReq.store (true); }
-    void loopUndo()  { undoReq.store (true); }
+    enum LoopCmd { LcStop, LcRecord, LcPlay, LcOverdub, LcUndo, LcClear, LcStopAll, LcClearAll };
+    void loopRequest (int track, int cmd);                    // message thread -> audio thread (lock-free)
+    int  selectedLoopTrack() const { return juce::jlimit (0, 3, (int) raw[LoopTrack]->load()); }
     std::atomic<float> loopProgress { 0.0f };
-    std::atomic<bool> loopHasData { false }, loopCanUndo { false };
+    std::atomic<bool> loopHasData { false };
+    std::atomic<int> loopState[4] {};                         // 0 empty, 1 stopped, 2 playing, 3 overdub, 4 recording
+    std::atomic<bool> loopUndoOk[4] {};
 
     noir::Tuner& getTuner() { return tuner; }
 
     // ---- DAW integration ------------------------------------------------------------------------------
     static constexpr int NumMacros = 8, LinksPerMacro = 8;
 
-    // MIDI learn: right-click a control -> "MIDI Learn", then move a CC on your controller / footswitch.
-    void startMidiLearn (Id id) { learnTarget.store ((int) id); }
-    void cancelMidiLearn() { learnTarget.store (-1); }
-    int getLearnTarget() const { return learnTarget.load(); }
-    int getCcFor (Id id) const;
+    // ---- Universal MIDI mapping (any controller: CC knobs / pads / footswitches, notes, program change) ------
+    enum MidiType { MtCC, MtNote, MtProgram };
+    enum MidiAction { ActParam, ActPresetNext, ActPresetPrev, ActLoopCycle, ActLoopRec, ActLoopPlay, ActLoopDub,
+                      ActLoopStop, ActLoopUndo, ActLoopClear, ActTrackNext, ActTrackPrev, ActLoopStopAll, NumActions };
+    enum MidiMode { MmAuto, MmToggle, MmMomentary, MmAbsolute };
+    static constexpr int MaxBindings = 128;
+    struct MidiBinding { int type = -1, channel = 0, number = 0, action = 0, target = -1, mode = 0; };
+
+    static const char* actionName (int a);
+    void startLearn (int action, int target, int mode);
+    void startMidiLearn (Id id) { startLearn (ActParam, (int) id, MmAuto); }
+    void cancelMidiLearn() { learnActive.store (false); }
+    bool isLearning() const { return learnActive.load(); }
+    int  getLearnTarget() const { return learnActive.load() ? (learnAction.load() == ActParam ? learnTarget.load() : 1000 + learnAction.load()) : -1; }
+    int  addBinding (const MidiBinding&);
+    bool getBinding (int index, MidiBinding& out) const;
+    void removeBinding (int index);
+    int  getCcFor (Id id) const;
     void clearMidiFor (Id id);
     void clearAllMidi();
     std::array<int, 128> midiMapSnapshot() const;
+    juce::String describeBinding (const MidiBinding&) const;
+    static juce::String describeSource (int type, int channel, int number);
+
+    // monitor: last 16 incoming messages (packed type | channel | number | value)
+    std::atomic<uint32_t> midiLog[16] {};
+    std::atomic<int> midiCount { 0 };
+
+    void loadPreset (int index);
+    std::atomic<int> currentPreset { -1 };
+
+    // performance
+    std::atomic<float> cpuLoad { 0.0f };
+    std::atomic<int> xruns { 0 };
 
     // Macros: eight automatable knobs, each driving up to eight parameters over a [lo, hi] range.
     struct LinkInfo { int param = -1; float lo = 0.0f, hi = 1.0f; };
@@ -113,8 +142,12 @@ private:
     void readHost();
     void handleMidi (juce::MidiBuffer&);
     void applyMacros();
-    void handleAsyncUpdate() override;
-    void setParamNormalised (int index, float norm01);
+    void timerCallback() override;
+    void setParamNormalised (int index, float norm01);   // audio-thread safe: queued, applied on the message thread
+    void applyBinding (const MidiBinding&, int type, int value, bool pressed);
+    void doLoopCommand (int track, int cmd) noexcept;
+    static int choiceCount (int paramIndex);
+    bool ccWasDown[128] {};
     void makeStereo();
     void applyMaster();
 
@@ -131,8 +164,18 @@ private:
     Order sharedOrder = defaultOrder(), audioOrder = defaultOrder();
 
     // DAW state
-    std::atomic<int> ccMap[128];
-    std::atomic<int> learnTarget { -1 }, pendingPreset { -1 };
+    struct BindSlot { std::atomic<int> type { -1 }, channel { 0 }, number { 0 }, action { 0 }, target { -1 }, mode { 0 }; };
+    BindSlot bindings[MaxBindings];
+    std::atomic<bool> learnActive { false };
+    std::atomic<int> learnTarget { -1 }, learnAction { 0 }, learnMode { 0 };
+    std::atomic<int> pendingPreset { -1 }, presetDelta { 0 };
+
+    struct PendingParam { int index; float value; };
+    juce::AbstractFifo paramFifo { 512 };
+    PendingParam paramBuf[512];
+    juce::AbstractFifo loopFifo { 32 };
+    int loopBuf[32] {};
+    void pushParam (int index, float norm);
     struct Link { std::atomic<int> param { -1 }; std::atomic<float> lo { 0.0f }, hi { 1.0f }; };
     Link links[NumMacros][LinksPerMacro];
     float lastMacro[NumMacros] {};
@@ -186,7 +229,10 @@ private:
     juce::AudioBuffer<float> chainBuf, dryBuf, rawBuf, micBuf, fadeBuf, gainBuf, wetBuf;
 
     juce::String irPath;
-    std::atomic<bool> irLoaded { false }, clearReq { false }, undoReq { false };
+    std::atomic<bool> irLoaded { false };
+    noir::Limiter limiter;
+    bool nanFlag = false;
+    int loopMuteMask = 0;
     bool wasIR = false, wasActive = false;
     int lastRevType = -1, lastLoopMode = 0, revIdle = 3, dlyIdle = 3;
 

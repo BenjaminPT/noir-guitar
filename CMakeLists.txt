@@ -29,7 +29,8 @@ juce_add_plugin(NoirGuitar
 target_sources(NoirGuitar PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/DawPanel.cpp)
+    Source/DawPanel.cpp
+    Source/MidiPanel.cpp)
 
 target_compile_definitions(NoirGuitar PUBLIC
     JUCE_WEB_BROWSER=0
@@ -38,10 +39,21 @@ target_compile_definitions(NoirGuitar PUBLIC
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
-    JUCE_ASIO=0
     JUCE_WASAPI=1
     JUCE_DIRECTSOUND=1
     JUCE_USE_WINRT_MIDI=0)
+
+# ASIO: needs Steinberg's ASIO SDK (not bundled). The CI downloads it and passes -DASIO_SDK_DIR=...
+set(ASIO_SDK_DIR "" CACHE PATH "Path to the unpacked Steinberg ASIO SDK")
+if(ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/iasiodrv.h")
+    message(STATUS "ASIO enabled: ${ASIO_SDK_DIR}")
+    target_compile_definitions(NoirGuitar PUBLIC JUCE_ASIO=1)
+    target_include_directories(NoirGuitar PRIVATE
+        "${ASIO_SDK_DIR}/common" "${ASIO_SDK_DIR}/host" "${ASIO_SDK_DIR}/host/pc")
+else()
+    message(STATUS "ASIO disabled (no SDK found)")
+    target_compile_definitions(NoirGuitar PUBLIC JUCE_ASIO=0)
+endif()
 
 target_link_libraries(NoirGuitar
     PRIVATE

@@ -113,6 +113,8 @@ public:
         ratio = target = 1.0f;
     }
 
+    void reset() noexcept { line.clear(); phase = 0.0f; ratio = target; }
+
     void setSemitones (float s) noexcept { target = std::pow (2.0f, s / 12.0f); }
 
     inline float process (float x) noexcept
@@ -178,32 +180,39 @@ private:
 };
 
 //==============================================================================
-// Overdrive / Distortion / Fuzz. Runs at the oversampled rate.
+// Drive pedals, each modelled on the circuit topology of a classic (original code, not a copy):
+//   Overdrive   - Tube-Screamer style: mid-hump clean/clip blend, soft symmetric clipping
+//   Distortion  - RAT style: op-amp gain with gain-dependent bandwidth, hard diode clipping, passive low-pass tone
+//   Fuzz        - Fuzz-Face style: two asymmetric transistor stages, bias that sags with level, interstage coupling
+//   Muff        - Big-Muff style: two cascaded clipping stages, scooped LP/HP tone blend, recovery stage
+//   Metal       - tight, boosted high-gain: HP-tightened cascade, scooped mids, presence
+//   Octave Fuzz - Octavia style: full-wave rectified octave-up blended into a fuzz
+// Runs at the oversampled rate. Output levels are matched so every type sits near the same loudness.
 class DriveStage
 {
 public:
-    enum Type { Overdrive, Distortion, Fuzz };
+    enum Type { Overdrive, Distortion, Fuzz, Muff, Metal, OctFuzz };
 
     void prepare (double osRate)
     {
         sr = osRate;
-        hpOd.highpass (sr, 720.0, 0.707);
-        preLp.lowpass (sr, 5200.0, 0.707);
-        midBump.peaking (sr, 900.0, 0.8, 3.0);
-        hpDist.highpass (sr, 140.0, 0.707);
-        hpFuzz.highpass (sr, 60.0, 0.707);
         gainSm.reset (sr, 0.03);
         levelSm.reset (sr, 0.03);
         mixSm.reset (sr, 0.01);
         gainSm.setCurrentAndTargetValue (1.0f);
         levelSm.setCurrentAndTargetValue (1.0f);
         mixSm.setCurrentAndTargetValue (0.0f);
-        lastTone = -1.0f;
-        lastType = -1;
+        lastTone = -1.0f; lastDrive = -1.0f; lastType = -1;
+        envAtk = 1.0f - (float) std::exp (-1.0 / (0.002 * sr));
+        envRel = 1.0f - (float) std::exp (-1.0 / (0.150 * sr));
         reset();
     }
 
-    void reset() noexcept { hpOd.reset(); preLp.reset(); tone.reset(); midBump.reset(); hpDist.reset(); hpFuzz.reset(); }
+    void reset() noexcept
+    {
+        hpIn.reset(); lpA.reset(); lpB.reset(); hpMid.reset(); tone.reset(); post1.reset(); post2.reset();
+        mLp.reset(); mHp.reset(); dcHp.reset(); od1.reset(); env = 0.0f;
+    }
 
     bool active() const { return mixSm.isSmoothing() || mixSm.getTargetValue() > 0.5f; }
 
@@ -211,53 +220,160 @@ public:
     {
         mixSm.setTargetValue (on ? 1.0f : 0.0f);
         type = t;
-
-        float g = 1.0f;
-        switch (t)
-        {
-            case Distortion: g = std::pow (10.0f, 0.7f + drive01 * 2.3f); break;
-            case Fuzz:       g = std::pow (10.0f, 0.8f + drive01 * 2.2f); break;
-            default:         g = std::pow (10.0f, drive01 * 2.0f); break;
-        }
-        gainSm.setTargetValue (g);
         levelSm.setTargetValue (juce::Decibels::decibelsToGain (levelDb));
 
-        if (std::abs (tone01 - lastTone) > 1.0e-4f || t != lastType)
+        if (std::abs (tone01 - lastTone) < 1.0e-4f && std::abs (drive01 - lastDrive) < 1.0e-4f && t == lastType)
+            return;
+        const bool typeChanged = t != lastType;
+        lastTone = tone01; lastDrive = drive01; lastType = t;
+
+        switch (t)
         {
-            lastTone = tone01;
-            lastType = t;
-            const double base = t == Fuzz ? 700.0 : (t == Distortion ? 1200.0 : 900.0);
-            tone.lowpass (sr, base * std::pow (10.0, (double) tone01 * (t == Overdrive ? 1.0 : 0.9)), 0.707);
+            case Distortion:   // RAT: gain 8..400, op-amp GBW ~ 1 MHz / gain
+            {
+                g1 = std::pow (10.0f, 0.9f + drive01 * 1.7f);
+                hpIn.highpass (sr, 110.0, 0.707);
+                lpA.lowpass (sr, juce::jlimit (2300.0, 14000.0, 1.0e6 / (double) g1), 0.707);
+                tone.lowpass (sr, 600.0 * std::pow (14.0, (double) tone01), 0.707);
+                outScale = 0.20f / (1.0f + 0.18f * std::log10 (g1));
+                break;
+            }
+            case Fuzz:         // Fuzz Face
+            {
+                g1 = std::pow (10.0f, 0.75f + drive01 * 1.15f);
+                hpIn.highpass (sr, 55.0, 0.707);
+                hpMid.highpass (sr, 38.0, 0.707);
+                lpA.lowpass (sr, 7500.0, 0.707);
+                tone.lowpass (sr, 1500.0 * std::pow (5.0, (double) tone01), 0.707);
+                outScale = 0.19f;
+                break;
+            }
+            case Muff:         // Big Muff
+            {
+                g1 = std::pow (10.0f, 0.9f + drive01 * 1.0f);
+                hpIn.highpass (sr, 65.0, 0.707);
+                lpA.lowpass (sr, 4200.0, 0.707);
+                lpB.lowpass (sr, 4800.0, 0.707);
+                hpMid.highpass (sr, 28.0, 0.707);
+                mLp.lp (sr, 408.0);
+                mHp.lp (sr, 1850.0);
+                tone01Cached = tone01;
+                outScale = 0.17f;
+                break;
+            }
+            case Metal:
+            {
+                g1 = std::pow (10.0f, 1.0f + drive01 * 1.2f);
+                hpIn.highpass (sr, 520.0, 0.707);
+                lpA.lowpass (sr, 5200.0, 0.707);
+                lpB.lowpass (sr, 7800.0, 0.707);
+                hpMid.highpass (sr, 70.0, 0.707);
+                post1.lowShelf (sr, 160.0, 4.0);
+                post2.peaking (sr, 700.0, 0.8, -6.0);
+                tone.highShelf (sr, 3200.0, -6.0 + tone01 * 12.0);
+                outScale = 0.17f;
+                break;
+            }
+            case OctFuzz:
+            {
+                g1 = std::pow (10.0f, 0.8f + drive01 * 1.2f);
+                hpIn.highpass (sr, 90.0, 0.707);
+                dcHp.highpass (sr, 70.0, 0.707);
+                tone.lowpass (sr, 1500.0 * std::pow (6.0, (double) tone01), 0.707);
+                outScale = 0.19f;
+                break;
+            }
+            default:           // Tube-Screamer style overdrive (unchanged voicing)
+            {
+                g1 = std::pow (10.0f, drive01 * 2.0f);
+                hpIn.highpass (sr, 720.0, 0.707);
+                lpA.lowpass (sr, 5200.0, 0.707);
+                hpMid.peaking (sr, 900.0, 0.8, 3.0);
+                tone.lowpass (sr, 900.0 * std::pow (10.0, (double) tone01), 0.707);
+                outScale = 1.05f / (1.0f + 1.6f * drive01);
+                break;
+            }
         }
+        if (typeChanged) { hpIn.reset(); lpA.reset(); lpB.reset(); hpMid.reset(); tone.reset(); post1.reset(); post2.reset(); mLp.reset(); mHp.reset(); dcHp.reset(); env = 0.0f; }
     }
 
     inline float process (float x) noexcept
     {
         const float m  = mixSm.getNextValue();
-        const float g  = gainSm.getNextValue();
         const float lv = levelSm.getNextValue();
         float y;
 
         switch (type)
         {
             case Distortion:
-                y = hardish (g * hpDist.process (x));
-                y = tone.process (y * 0.65f);
+            {
+                float v = hpIn.process (x) * g1;
+                v = lpA.process (v);
+                v = hardish (v * (1.0f / 0.55f));          // 1N914 pair: hard knee at ~0.55 V
+                y = tone.process (v) * outScale;
                 break;
+            }
             case Fuzz:
             {
-                float v = g * hpFuzz.process (x);
-                v = std::tanh (v + 0.35f) - 0.3364f;
-                y = tone.process (juce::jlimit (-0.9f, 1.0f, v * 3.0f) * 0.55f);
+                const float v = hpIn.process (x) * g1;
+                const float a = std::abs (v);
+                env += (a - env) * (a > env ? envAtk : envRel);
+                const float bias = 0.10f + 0.30f * juce::jmin (env, 2.0f) * 0.5f;   // starves with level -> sag / gating
+                float s1 = std::tanh (v + bias) - std::tanh (bias);
+                s1 = hpMid.process (s1);
+                float u = s1 * 3.5f;
+                float s2 = u > 0.0f ? std::tanh (u) : std::tanh (u * 0.65f) * 1.35f;   // asymmetric second stage
+                s2 = lpA.process (s2);
+                y = tone.process (s2) * outScale;
+                break;
+            }
+            case Muff:
+            {
+                float v = hpIn.process (x) * g1;
+                float s1 = std::tanh (v * 0.9f);
+                s1 = lpA.process (s1);
+                s1 = hpMid.process (s1);
+                float s2 = std::tanh (s1 * 5.5f);
+                s2 = lpB.process (s2);
+                const float lo = mLp.process (s2);
+                const float hi = s2 - mHp.process (s2);
+                const float t = tone01Cached;
+                float s = lo * (1.0f - t) * 1.5f + hi * t * 1.9f;
+                y = std::tanh (s * 2.2f) * outScale;
+                break;
+            }
+            case Metal:
+            {
+                float v = hpIn.process (x) * g1;
+                float s1 = std::tanh (v);
+                s1 = lpA.process (s1);
+                s1 = hpMid.process (s1);
+                float s2 = hardish (s1 * 5.0f);
+                s2 = post1.process (s2);
+                s2 = post2.process (s2);
+                s2 = tone.process (s2);
+                y = lpB.process (s2) * outScale;
+                break;
+            }
+            case OctFuzz:
+            {
+                float v = hpIn.process (x) * g1;
+                const float u = std::tanh (v);
+                const float r = dcHp.process (std::abs (u));
+                float s = std::tanh (2.4f * (0.55f * u + 0.95f * r));
+                y = tone.process (s) * outScale;
                 break;
             }
             default:
-                y = x + g * hpOd.process (x);
-                y = preLp.process (y);
-                y = std::tanh (y);
-                y = tone.process (y * 0.8f);
-                y = midBump.process (y);
+            {
+                float s = x + g1 * hpIn.process (x);
+                s = lpA.process (s);
+                s = std::tanh (s);
+                s = tone.process (s * 0.8f);
+                s = hpMid.process (s);
+                y = s * outScale;
                 break;
+            }
         }
         y *= lv;
         return x + (y - x) * m;
@@ -266,10 +382,11 @@ public:
 private:
     double sr = 44100.0;
     int type = 0, lastType = -1;
-    Biquad hpOd, preLp, tone, midBump, hpDist, hpFuzz;
+    Biquad hpIn, lpA, lpB, hpMid, tone, post1, post2, dcHp, od1;
+    OnePole mLp, mHp;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSm, levelSm;
     juce::SmoothedValue<float> mixSm;
-    float lastTone = -1.0f;
+    float lastTone = -1.0f, lastDrive = -1.0f, g1 = 1.0f, outScale = 0.3f, env = 0.0f, envAtk = 0.1f, envRel = 0.001f, tone01Cached = 0.5f;
 };
 
 //==============================================================================

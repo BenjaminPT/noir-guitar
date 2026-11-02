@@ -34,14 +34,24 @@ inline const std::vector<PresetDef>& factoryPresets()
 
         { "Modern Metal", {
             { GateThr, -55 }, { BoostOn, 1 }, { BoostType, 1 }, { BoostGain, 8 },
-            { DrvType, 1 }, { DrvDrive, 0.5f }, { DrvTone, 0.6f }, { DrvLevel, -3 },
-            { AmpGain, 8 }, { AmpMid, 4 }, { AmpTreble, 6 }, { AmpPres, 6 }, { CabType, 2 },
+            { DrvType, 4 }, { DrvDrive, 0.55f }, { DrvTone, 0.55f }, { DrvLevel, 0 },
+            { AmpGain, 6.5f }, { AmpMid, 4 }, { AmpTreble, 6 }, { AmpPres, 6 }, { CabType, 2 },
             { EqOn, 1 }, { EqLow, 2 }, { EqHiMid, 2 } } },
 
         { "Fuzz Face 60s", {
             { DrvType, 2 }, { DrvDrive, 0.7f }, { DrvTone, 0.4f }, { AmpGain, 4 }, { CabType, 0 },
             { M1On, 1 }, { M1Type, 3 }, { M1Rate, 0.35f }, { M1Depth, 0.5f },
             { RevOn, 1 }, { RevType, 3 }, { RevMix, 0.35f } } },
+
+        { "Big Muff Sustain", {
+            { DrvType, 3 }, { DrvDrive, 0.55f }, { DrvTone, 0.5f }, { AmpGain, 4 }, { CabType, 1 },
+            { DlyOn, 1 }, { DlyType, 2 }, { DlyMix, 0.2f }, { RevOn, 1 }, { RevMix, 0.2f } } },
+
+        { "Singing Lead", {
+            { CompOn, 1 }, { CompAmt, 0.4f }, { DrvType, 0 }, { DrvDrive, 0.55f }, { DrvTone, 0.6f },
+            { AmpGain, 5.5f }, { AmpMid, 6 }, { CabType, 1 },
+            { DlyOn, 1 }, { DlyType, 2 }, { DlyTime, 420 }, { DlyFb, 0.3f }, { DlyMix, 0.25f },
+            { RevOn, 1 }, { RevType, 1 }, { RevMix, 0.22f } } },
 
         { "Funk Wah", {
             { DrvOn, 0 }, { AmpGain, 3.5f }, { CabType, 1 },
@@ -56,7 +66,7 @@ inline const std::vector<PresetDef>& factoryPresets()
             { RevOn, 1 }, { RevType, 1 }, { RevMix, 0.3f } } },
 
         { "Shoegaze Wash", {
-            { DrvType, 2 }, { DrvDrive, 0.55f }, { AmpGain, 6 },
+            { DrvType, 3 }, { DrvDrive, 0.6f }, { DrvTone, 0.45f }, { AmpGain, 4.5f },
             { M1On, 1 }, { M1Type, 0 }, { M1Rate, 0.2f }, { M1Depth, 0.8f },
             { PitchOn, 1 }, { PitchType, 1 }, { PitchShift, 12 }, { PitchMix, 0.35f },
             { DlyOn, 1 }, { DlyType, 0 }, { DlyTime, 450 }, { DlyFb, 0.5f }, { DlyMix, 0.35f },
@@ -83,7 +93,7 @@ inline const std::vector<PresetDef>& factoryPresets()
 
         { "Octave Fuzz Lead", {
             { PitchOn, 1 }, { PitchType, 2 }, { PitchMix, 0.5f },
-            { DrvType, 2 }, { DrvDrive, 0.6f },
+            { DrvType, 5 }, { DrvDrive, 0.6f },
             { DlyOn, 1 }, { DlyType, 1 }, { DlyMix, 0.25f } } },
 
         { "Granular Clouds", {

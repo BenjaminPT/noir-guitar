@@ -19,8 +19,26 @@ jobs:
         with:
           arch: x64
 
+      - name: Fetch ASIO SDK (optional)
+        id: asio
+        shell: pwsh
+        run: |
+          $ok = $false
+          try {
+            Invoke-WebRequest -Uri "https://download.steinberg.net/sdk_downloads/asiosdk_2.3.3_2019-06-14.zip" -OutFile asio.zip -UseBasicParsing -MaximumRetryCount 3 -RetryIntervalSec 5
+            Expand-Archive asio.zip -DestinationPath asio -Force
+            $hdr = Get-ChildItem -Recurse asio -Filter iasiodrv.h | Select-Object -First 1
+            if ($hdr) { "dir=$($hdr.Directory.Parent.FullName)" >> $env:GITHUB_OUTPUT; $ok = $true }
+          } catch { Write-Host "ASIO download failed: $_" }
+          if (-not $ok) { Write-Host "::warning::ASIO SDK not available - building without ASIO"; "dir=" >> $env:GITHUB_OUTPUT }
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+        shell: pwsh
+        run: |
+          $asio = "${{ steps.asio.outputs.dir }}"
+          $a = @("-S",".","-B","build","-G","Ninja","-DCMAKE_BUILD_TYPE=Release","-DCMAKE_C_COMPILER=cl","-DCMAKE_CXX_COMPILER=cl")
+          if ($asio) { $a += "-DASIO_SDK_DIR=$asio" }
+          cmake @a
 
       - name: Build
         run: cmake --build build --parallel

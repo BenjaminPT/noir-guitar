@@ -21,32 +21,50 @@ struct Rng
 inline int nextPow2 (int n) { int p = 1; while (p < n) p <<= 1; return p; }
 
 //==============================================================================
-// Stereo looper: record, play, overdub (multi-layer), half / double speed, reverse, one-level undo.
+// Four-track stereo looper (Boss RC style). The first recording sets the loop length; the other tracks are
+// recorded against it. Undo / redo swaps buffers (no copying), clearing is spread over time: nothing here
+// ever blocks the audio thread.
 class Looper
 {
 public:
     enum Mode { Stop, Record, Play, Overdub };
+    static constexpr int NumTracks = 4;
 
     void prepare (double sampleRate)
     {
         sr = sampleRate;
-        maxLen = (int) (45.0 * sr);
-        bufL.assign ((size_t) maxLen, 0.0f); bufR.assign ((size_t) maxLen, 0.0f);
-        undoL.assign ((size_t) maxLen, 0.0f); undoR.assign ((size_t) maxLen, 0.0f);
-        length = 0; posD = 0.0; mode = Stop; undoReady = false; undoCopied = 0; dubbing = false;
+        maxLen = juce::jmin ((int) (30.0 * sr), 1500000);
+        for (auto& t : tr)
+        {
+            t.L.assign ((size_t) maxLen, 0.0f); t.R.assign ((size_t) maxLen, 0.0f);
+            t.uL.assign ((size_t) maxLen, 0.0f); t.uR.assign ((size_t) maxLen, 0.0f);
+            t.copied.assign ((size_t) maxLen, 0);
+            t.reset();
+        }
+        length = 0; posD = 0.0; recMaster = -1;
     }
 
-    int getMode() const noexcept { return mode; }
+    int  trackMode (int t) const noexcept { return tr[t].mode; }
+    bool trackHas (int t) const noexcept { return tr[t].has; }
+    bool trackCanUndo (int t) const noexcept { return tr[t].undoReady; }
+    // 0 empty, 1 stopped, 2 playing, 3 overdubbing, 4 recording
+    int uiState (int t) const noexcept
+    {
+        const auto& k = tr[t];
+        if (recMaster == t || (k.recording && k.mode == Overdub)) return 4;
+        if (! k.has) return 0;
+        return k.mode == Stop ? 1 : (k.mode == Play ? 2 : 3);
+    }
     bool hasLoop() const noexcept { return length > 0; }
     float progress() const noexcept { return length > 0 ? (float) (posD / (double) length) : 0.0f; }
-    bool canUndo() const noexcept { return undoReady; }
+    bool anyRunning() const noexcept { for (auto& t : tr) if (t.mode != Stop) return true; return false; }
 
     void setQuantize (double samplesPerBar) noexcept { quantSamples = samplesPerBar; }
 
-    // Lock the loop position to the host timeline (seconds since the host's start) while playing at 1x.
+    // Lock the loop position to the host timeline (seconds) while playing.
     void syncTo (double seconds) noexcept
     {
-        if (length <= 0 || (mode != Play && mode != Overdub)) return;
+        if (length <= 0 || ! anyRunning() || recMaster >= 0) return;
         double t = std::fmod (seconds * sr, (double) length);
         if (t < 0.0) t += (double) length;
         double d = std::abs (t - posD);
@@ -54,101 +72,131 @@ public:
         if (d > 256.0) posD = t;
     }
 
-    void clear() noexcept { length = 0; posD = 0.0; mode = Stop; undoReady = false; dubbing = false; }
-
-    void setMode (int m) noexcept
+    void clear (int t) noexcept
     {
-        if (m == mode) return;
-        const int old = mode;
+        tr[t].reset();
+        tr[t].dirty = true; tr[t].zeroPos = 0;
+        if (recMaster == t) { recMaster = -1; length = 0; posD = 0.0; }
+        bool any = false;
+        for (auto& x : tr) any |= x.has;
+        if (! any) { length = 0; posD = 0.0; recMaster = -1; }
+    }
+
+    void clearAll() noexcept { for (int t = 0; t < NumTracks; ++t) clear (t); }
+    void stopAll() noexcept { for (int t = 0; t < NumTracks; ++t) setMode (t, Stop); }
+
+    void setMode (int t, int m) noexcept
+    {
+        auto& k = tr[t];
+        if (m == k.mode) return;
 
         if (m == Record)
         {
-            length = 0; posD = 0.0; mode = Record; undoReady = false; dubbing = false;
+            if (length == 0)                       // this track defines the loop
+            {
+                for (int i = 0; i < NumTracks; ++i) if (i != t) { tr[i].reset(); tr[i].dirty = true; tr[i].zeroPos = 0; }
+                k.reset(); k.mode = Record; recMaster = t; posD = 0.0;
+            }
+            else
+            {
+                if (k.dirty) finishWipe (k);       // rare: still being wiped, finish the part we need now
+                startDub (k);                      // slave "record" = overdub onto silence
+                k.recording = ! k.has;
+                k.has = true;
+                k.mode = Overdub;
+                if (posD == 0.0 && ! anyOtherRunning (t)) posD = 0.0;
+            }
         }
-        else if (old == Record)
+        else if (recMaster == t)                   // closing the first take
         {
             const int len = (int) posD;
-            if (len < (int) (0.1 * sr)) { length = 0; mode = Stop; posD = 0.0; return; }
+            recMaster = -1;
+            if (len < (int) (0.1 * sr)) { k.reset(); length = 0; posD = 0.0; return; }
             int newLen = len;
             if (quantSamples > 0.0)
             {
                 const double bars = juce::jmax (1.0, std::round ((double) len / quantSamples));
                 newLen = (int) juce::jmin ((double) maxLen, bars * quantSamples);
-                for (int i = len; i < newLen; ++i) { bufL[(size_t) i] = 0.0f; bufR[(size_t) i] = 0.0f; }
+                for (int i = len; i < newLen; ++i) { k.L[(size_t) i] = 0.0f; k.R[(size_t) i] = 0.0f; }
             }
-            length = newLen; posD = 0.0;
-            mode = m;
-            if (m == Overdub) beginDub();
+            length = newLen; posD = 0.0; k.has = true;
+            k.mode = m == Stop ? Stop : (m == Overdub ? Overdub : Play);
+            if (k.mode == Overdub) startDub (k);
         }
         else if (m == Overdub)
         {
-            if (length == 0) { mode = Stop; return; }
-            mode = Overdub;
-            beginDub();
+            if (! k.has || length == 0) return;
+            startDub (k); k.mode = Overdub;
         }
         else if (m == Play)
         {
-            if (length == 0) { mode = Stop; return; }
-            if (old == Stop) posD = 0.0;
-            mode = Play;
-            dubbing = false;
+            if (! k.has || length == 0) return;
+            if (! anyRunning()) posD = 0.0;
+            k.mode = Play; k.dubbing = false; k.recording = false;
         }
-        else // Stop
+        else
         {
-            mode = Stop; posD = 0.0; dubbing = false;
+            k.mode = Stop; k.dubbing = false; k.recording = false;
+            if (! anyRunning()) posD = 0.0;
         }
     }
 
-    void undo() noexcept
+    // Swap the track with its pre-overdub snapshot (press again to redo).
+    void undo (int t) noexcept
     {
-        if (! undoReady || length == 0) return;
-        std::copy (undoL.begin(), undoL.begin() + length, bufL.begin());
-        std::copy (undoR.begin(), undoR.begin() + length, bufR.begin());
-        undoReady = false;
+        auto& k = tr[t];
+        if (! k.undoReady || length == 0) return;
+        k.L.swap (k.uL); k.R.swap (k.uR);
     }
 
-    // speed: 0.5, 1 or 2
-    inline void process (float inL, float inR, float level, float speed, bool reverse, float& outL, float& outR) noexcept
+    // speed: 0.5, 1 or 2. muteMask: bit t set = track muted.
+    inline void process (float inL, float inR, float level, float speed, bool reverse, int muteMask,
+                         float& outL, float& outR) noexcept
     {
         outL = inL; outR = inR;
+        wipeStep();
 
-        if (mode == Record)
+        if (recMaster >= 0)
         {
+            auto& k = tr[recMaster];
             const int i = (int) posD;
             if (i < maxLen)
             {
-                bufL[(size_t) i] = inL; bufR[(size_t) i] = inR;
+                k.L[(size_t) i] = inL; k.R[(size_t) i] = inR;
                 posD += 1.0;
             }
-            else
-            {
-                length = maxLen; posD = 0.0; mode = Play;
-            }
+            else { length = maxLen; posD = 0.0; k.has = true; k.mode = Play; recMaster = -1; }
             return;
         }
 
-        if (mode == Stop || length == 0) return;
+        if (length == 0 || ! anyRunning()) return;
 
         const int len = length;
         const int i0 = juce::jlimit (0, len - 1, (int) posD);
         const int i1 = (i0 + 1) % len;
         const float fr = (float) (posD - std::floor (posD));
-        const float pl = bufL[(size_t) i0] + fr * (bufL[(size_t) i1] - bufL[(size_t) i0]);
-        const float pr = bufR[(size_t) i0] + fr * (bufR[(size_t) i1] - bufR[(size_t) i0]);
-        outL = inL + pl * level;
-        outR = inR + pr * level;
+        float sl = 0.0f, sr_ = 0.0f;
 
-        if (mode == Overdub)
+        for (int t = 0; t < NumTracks; ++t)
         {
-            if (dubbing && undoCopied < len && ! undoReady)
+            auto& k = tr[t];
+            if (k.mode == Stop) continue;
+
+            if ((muteMask & (1 << t)) == 0 && k.has && ! k.recording)
             {
-                undoL[(size_t) i0] = bufL[(size_t) i0];
-                undoR[(size_t) i0] = bufR[(size_t) i0];
-                if (++undoCopied >= len) undoReady = true;
+                sl += k.L[(size_t) i0] + fr * (k.L[(size_t) i1] - k.L[(size_t) i0]);
+                sr_ += k.R[(size_t) i0] + fr * (k.R[(size_t) i1] - k.R[(size_t) i0]);
             }
-            bufL[(size_t) i0] += inL;
-            bufR[(size_t) i0] += inR;
+
+            if (k.mode == Overdub)
+            {
+                if (k.dubbing && ! k.undoReady) snapshot (k, i0, len);
+                k.L[(size_t) i0] += inL;
+                k.R[(size_t) i0] += inR;
+            }
         }
+        outL = inL + sl * level;
+        outR = inR + sr_ * level;
 
         posD += reverse ? -(double) speed : (double) speed;
         if (posD >= (double) len) posD -= (double) len;
@@ -156,12 +204,58 @@ public:
     }
 
 private:
-    void beginDub() noexcept { dubbing = true; undoCopied = 0; undoReady = false; }
+    struct Track
+    {
+        std::vector<float> L, R, uL, uR;
+        std::vector<unsigned char> copied;
+        int mode = Stop, copiedCount = 0, zeroPos = 0, snapPos = 0;
+        bool has = false, undoReady = false, dubbing = false, recording = false, dirty = false;
+
+        void reset() noexcept { mode = Stop; has = false; undoReady = false; dubbing = false; recording = false; copiedCount = 0; snapPos = 0; }
+    };
+
+    bool anyOtherRunning (int t) const noexcept { for (int i = 0; i < NumTracks; ++i) if (i != t && tr[i].mode != Stop) return true; return false; }
+
+    void finishWipe (Track& k) noexcept
+    {
+        const int to = juce::jmin (maxLen, length);
+        for (; k.zeroPos < to; ++k.zeroPos) { k.L[(size_t) k.zeroPos] = 0.0f; k.R[(size_t) k.zeroPos] = 0.0f; }
+        if (k.zeroPos >= maxLen) k.dirty = false;
+    }
+
+    void startDub (Track& k) noexcept
+    {
+        k.dubbing = true; k.undoReady = false; k.copiedCount = 0; k.snapPos = 0;
+        std::fill (k.copied.begin(), k.copied.begin() + juce::jmax (length, 1), (unsigned char) 0);
+    }
+
+    // Copy the pre-overdub audio into the undo buffers, on demand plus a background sweep.
+    inline void snapshot (Track& k, int i0, int len) noexcept
+    {
+        if (! k.copied[(size_t) i0]) { k.uL[(size_t) i0] = k.L[(size_t) i0]; k.uR[(size_t) i0] = k.R[(size_t) i0]; k.copied[(size_t) i0] = 1; ++k.copiedCount; }
+        for (int n = 0; n < 8 && k.snapPos < len; ++n, ++k.snapPos)
+            if (! k.copied[(size_t) k.snapPos])
+            {
+                k.uL[(size_t) k.snapPos] = k.L[(size_t) k.snapPos]; k.uR[(size_t) k.snapPos] = k.R[(size_t) k.snapPos];
+                k.copied[(size_t) k.snapPos] = 1; ++k.copiedCount;
+            }
+        if (k.copiedCount >= len) k.undoReady = true;
+    }
+
+    // Wipe cleared tracks a few samples at a time.
+    inline void wipeStep() noexcept
+    {
+        for (auto& k : tr)
+        {
+            if (! k.dirty) continue;
+            for (int n = 0; n < 64 && k.zeroPos < maxLen; ++n, ++k.zeroPos) { k.L[(size_t) k.zeroPos] = 0.0f; k.R[(size_t) k.zeroPos] = 0.0f; }
+            if (k.zeroPos >= maxLen) k.dirty = false;
+        }
+    }
 
     double sr = 44100.0, posD = 0.0, quantSamples = 0.0;
-    int maxLen = 0, length = 0, mode = Stop, undoCopied = 0;
-    bool undoReady = false, dubbing = false;
-    std::vector<float> bufL, bufR, undoL, undoR;
+    int maxLen = 0, length = 0, recMaster = -1;
+    Track tr[NumTracks];
 };
 
 //==============================================================================
@@ -446,6 +540,12 @@ public:
         w = 0; timer = 0; count = 0; act = Pass;
         sliceLen = base = (int) (0.125 * sr);
         capStart = capEnd = 0;
+    }
+
+    void reset() noexcept
+    {
+        std::fill (bufL.begin(), bufL.end(), 0.0f); std::fill (bufR.begin(), bufR.end(), 0.0f);
+        w = 0; timer = 0; count = 0; act = Pass; capStart = capEnd = 0;
     }
 
     void setParams (int m, float lenMs, float amt)

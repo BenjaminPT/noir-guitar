@@ -45,7 +45,7 @@ NoirProcessor::NoirProcessor()
 {
     for (int i = 0; i < NumParams; ++i)
         raw[i] = apvts.getRawParameterValue (kParams[i].id);
-    for (auto& c : ccMap) c.store (-1);
+    startTimerHz (50);
 }
 
 bool NoirProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -153,6 +153,7 @@ void NoirProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fPower.prepare (sr);
     for (auto& f : fSlot) f.prepare (sr);
     fAmp.prepare (sr * 4.0, 0.010);
+    limiter.prepare (sr);
 
     chainBuf.setSize (2, maxBlock, false, true, true);
     dryBuf.setSize (2, maxBlock, false, true, true);
@@ -181,13 +182,14 @@ void NoirProcessor::resetEffects()
     cab.each ([] (auto& e) { e.reset(); });
     eq.each ([] (auto& e) { e.reset(); });
     talk.each ([] (auto& e) { e.reset(); });
-    pitch.each ([this] (auto& e) { e.prepare (sr); });
+    pitch.each ([] (auto& e) { e.reset(); });
 
     vocoder.reset();
     mod1.reset(); mod2.reset(); lofi.reset(); delay.reset();
     granular.reset(); freeze.reset();
-    shimmer.prepare (sr);
-    glitch.prepare (sr);
+    shimmer.reset();
+    glitch.reset();
+    limiter.reset();
     reverb.reset();
     for (auto& c : convolution) c.reset();
     if (osDrive) osDrive->reset();
@@ -557,31 +559,39 @@ void NoirProcessor::runSlot (int slot)
 
         case SLooper:
         {
-            if (clearReq.exchange (false)) looper.clear();
-            if (undoReq.exchange (false)) looper.undo();
+            // queued commands from the UI
+            {
+                int start1, size1, start2, size2;
+                loopFifo.prepareToRead (loopFifo.getNumReady(), start1, size1, start2, size2);
+                for (int i = 0; i < size1; ++i) doLoopCommand (loopBuf[start1 + i] >> 8, loopBuf[start1 + i] & 255);
+                for (int i = 0; i < size2; ++i) doLoopCommand (loopBuf[start2 + i] >> 8, loopBuf[start2 + i] & 255);
+                loopFifo.finishedRead (size1 + size2);
+            }
 
             looper.setQuantize (on (LoopQuant) ? beatsPerBar * 60.0 / bpm * sr : 0.0);
 
             if (on (LoopFollow) && hostKnown.load())
             {
-                if (hostPlaying && ! lastHostPlaying && looper.hasLoop())
+                if (hostPlaying && ! lastHostPlaying)
                 {
-                    looper.setMode (noir::Looper::Play);
-                    lastLoopMode = noir::Looper::Play;
-                    setParamValue (LoopMode, (float) noir::Looper::Play);
+                    for (int t = 0; t < 4; ++t)
+                        if (looper.trackHas (t) && looper.trackMode (t) == noir::Looper::Stop)
+                            looper.setMode (t, noir::Looper::Play);
                 }
                 else if (! hostPlaying && lastHostPlaying)
-                {
-                    looper.setMode (noir::Looper::Stop);
-                    lastLoopMode = noir::Looper::Stop;
-                    setParamValue (LoopMode, (float) noir::Looper::Stop);
-                }
+                    looper.stopAll();
+
                 if (hostPlaying && hostHasPpq)
                     looper.syncTo (hostPpq * 60.0 / bpm + (double) chunkStart / sr);
             }
 
-            const int mode = (int) v (LoopMode);
-            if (mode != lastLoopMode) { looper.setMode (mode); lastLoopMode = mode; }
+            const int mode = (int) v (LoopMode);        // automation / MIDI of the "mode" parameter acts on the selected track
+            if (mode != lastLoopMode)
+            {
+                lastLoopMode = mode;
+                static const int cmdOf[4] = { LcStop, LcRecord, LcPlay, LcOverdub };
+                doLoopCommand (selectedLoopTrack(), cmdOf[juce::jlimit (0, 3, mode)]);
+            }
 
             if (fSlot[SLooper].active())
             {
@@ -592,7 +602,7 @@ void NoirProcessor::runSlot (int slot)
                 for (int i = 0; i < n; ++i)
                 {
                     float ol, orr;
-                    looper.process (chanL[i], chanR[i], loopLevel, spd, rev, ol, orr);
+                    looper.process (chanL[i], chanR[i], loopLevel, spd, rev, loopMuteMask, ol, orr);
                     const float k = fSlot[SLooper].next();
                     chanL[i] += (ol - chanL[i]) * k;
                     chanR[i] += (orr - chanR[i]) * k;
@@ -609,6 +619,7 @@ void NoirProcessor::runSlot (int slot)
 void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+    const auto t0 = juce::Time::getHighResolutionTicks();
 
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
@@ -623,6 +634,7 @@ void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     handleMidi (midi);
     applyMacros();
     readHost();
+    loopMuteMask = (on (LoopMute1) ? 1 : 0) | (on (LoopMute2) ? 2 : 0) | (on (LoopMute3) ? 4 : 0) | (on (LoopMute4) ? 8 : 0);
 
     fPower.set (on (Power));
     const bool tunerOn = on (TunerOn);
@@ -720,8 +732,12 @@ void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         {
             const float g = outGainSm.getNextValue() * muteSm.getNextValue();
             const float p = fPower.next();
-            const float a = noir::softLimit (chanL[i] * g);
-            const float b = noir::softLimit (R[i] * g);
+            float a = chanL[i] * g;
+            float b = R[i] * g;
+            if (! (std::isfinite (a) && std::isfinite (b))) { a = b = 0.0f; nanFlag = true; }
+            const float lim = limiter.gainFor (juce::jmax (std::abs (a), std::abs (b)));
+            a = noir::softLimit (a * lim);
+            b = noir::softLimit (b * lim);
             const float dry = rawp[i] * g;
             const float oa = dry + (a - dry) * p;
             const float ob = dry + (b - dry) * p;
@@ -739,6 +755,8 @@ void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                 outL[i] = m;
             }
         }
+
+        if (nanFlag) { nanFlag = false; resetEffects(); }   // a blown-up filter must never silence the plugin for long
     }
 
     for (int ch = numOut; ch < buffer.getNumChannels(); ++ch)
@@ -747,11 +765,17 @@ void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     lastHostPlaying = hostPlaying;
     loopProgress.store (looper.progress());
     loopHasData.store (looper.hasLoop());
-    loopCanUndo.store (looper.canUndo());
+    for (int t = 0; t < 4; ++t) { loopState[t].store (looper.uiState (t)); loopUndoOk[t].store (looper.trackCanUndo (t)); }
 
     // Meters: the editor reads and resets these.
     if (inPk  > inPeak.load())  inPeak.store (inPk);
     if (outPk > outPeak.load()) outPeak.store (outPk);
+
+    // CPU load of this block relative to its duration (smoothed); an overrun counts as a possible glitch.
+    const double used = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+    const float load = (float) (used / ((double) total / sr));
+    cpuLoad.store (cpuLoad.load() * 0.9f + load * 0.1f);
+    if (load > 0.95f) xruns.fetch_add (1);
 }
 
 
@@ -783,11 +807,260 @@ void NoirProcessor::readHost()
     hostBpmShown.store ((float) bpm);
 }
 
+void NoirProcessor::pushParam (int index, float norm)
+{
+    int s1, n1, s2, n2;
+    paramFifo.prepareToWrite (1, s1, n1, s2, n2);
+    if (n1 > 0) { paramBuf[s1] = { index, norm }; paramFifo.finishedWrite (1); }
+}
+
+// Audio-thread safe: the change is queued and applied by the timer on the message thread.
 void NoirProcessor::setParamNormalised (int index, float norm01)
 {
     if (index < 0 || index >= NumParams) return;
-    if (auto* p = param ((Id) index))
-        p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, norm01));
+    pushParam (index, juce::jlimit (0.0f, 1.0f, norm01));
+}
+
+void NoirProcessor::timerCallback()
+{
+    int s1, n1, s2, n2;
+    paramFifo.prepareToRead (paramFifo.getNumReady(), s1, n1, s2, n2);
+    auto apply = [this] (const PendingParam& pp)
+    {
+        if (auto* p = param ((Id) pp.index)) p->setValueNotifyingHost (pp.value);
+    };
+    for (int i = 0; i < n1; ++i) apply (paramBuf[s1 + i]);
+    for (int i = 0; i < n2; ++i) apply (paramBuf[s2 + i]);
+    paramFifo.finishedRead (n1 + n2);
+
+    if (const int p = pendingPreset.exchange (-1); p >= 0) loadPreset (p);
+    if (const int d = presetDelta.exchange (0); d != 0)
+    {
+        const int n = (int) factoryPresets().size();
+        if (n > 0) loadPreset (((currentPreset.load() < 0 ? (d > 0 ? -1 : 0) : currentPreset.load()) + d % n + n) % n);
+    }
+}
+
+void NoirProcessor::loadPreset (int index)
+{
+    if (index < 0 || index >= (int) factoryPresets().size()) return;
+    currentPreset.store (index);
+    applyPreset (*this, index);
+}
+
+void NoirProcessor::loopRequest (int track, int cmd)
+{
+    if (cmd == LcRecord || cmd == LcPlay || cmd == LcOverdub) setParamValue (LoopOn, 1.0f);
+    int s1, n1, s2, n2;
+    loopFifo.prepareToWrite (1, s1, n1, s2, n2);
+    if (n1 > 0) { loopBuf[s1] = (juce::jlimit (0, 3, track) << 8) | cmd; loopFifo.finishedWrite (1); }
+}
+
+void NoirProcessor::doLoopCommand (int t, int cmd) noexcept
+{
+    t = juce::jlimit (0, 3, t);
+    const int st = looper.uiState (t);
+    switch (cmd)
+    {
+        case LcStop:     looper.setMode (t, noir::Looper::Stop); break;
+        case LcRecord:   looper.setMode (t, st == 4 ? noir::Looper::Play : noir::Looper::Record); break;
+        case LcPlay:     looper.setMode (t, noir::Looper::Play); break;
+        case LcOverdub:  looper.setMode (t, st == 3 ? noir::Looper::Play : (st == 0 ? noir::Looper::Record : noir::Looper::Overdub)); break;
+        case LcUndo:     looper.undo (t); break;
+        case LcClear:    looper.clear (t); break;
+        case LcStopAll:  looper.stopAll(); break;
+        case LcClearAll: looper.clearAll(); break;
+        default: break;
+    }
+}
+
+//==============================================================================
+// Universal MIDI engine
+const char* NoirProcessor::actionName (int a)
+{
+    static const char* n[NumActions] = { "Parameter / effect", "Next preset", "Previous preset", "Looper: one-button cycle",
+                                         "Looper: record", "Looper: play", "Looper: overdub", "Looper: stop", "Looper: undo / redo",
+                                         "Looper: clear track", "Looper: next track", "Looper: previous track", "Looper: stop all" };
+    return n[juce::jlimit (0, (int) NumActions - 1, a)];
+}
+
+juce::String NoirProcessor::describeSource (int type, int channel, int number)
+{
+    static const char* names[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    juce::String s = type == MtCC ? "CC " + juce::String (number)
+                   : type == MtNote ? "Note " + juce::String (number) + " (" + names[number % 12] + juce::String (number / 12 - 1) + ")"
+                   : "Program " + juce::String (number);
+    if (channel > 0) s << "  ch " << channel;
+    return s;
+}
+
+juce::String NoirProcessor::describeBinding (const MidiBinding& b) const
+{
+    static const char* modes[4] = { "auto", "toggle", "momentary", "absolute" };
+    juce::String target = b.action == ActParam && b.target >= 0 && b.target < NumParams ? paramLabel (b.target) : juce::String (actionName (b.action));
+    return describeSource (b.type, b.channel, b.number) + "   >   " + target + "   [" + modes[juce::jlimit (0, 3, b.mode)] + "]";
+}
+
+void NoirProcessor::startLearn (int action, int target, int mode)
+{
+    learnAction.store (action); learnTarget.store (target); learnMode.store (mode);
+    learnActive.store (true);
+}
+
+int NoirProcessor::addBinding (const MidiBinding& b)
+{
+    int freeSlot = -1;
+    for (int i = 0; i < MaxBindings; ++i)
+    {
+        auto& s = bindings[i];
+        const int t = s.type.load();
+        if (t < 0) { if (freeSlot < 0) freeSlot = i; continue; }
+        if (t == b.type && s.number.load() == b.number && s.channel.load() == b.channel
+            && s.action.load() == b.action && s.target.load() == b.target)
+        { freeSlot = i; break; }                                // same source and same target: update in place
+    }
+    if (freeSlot < 0) return -1;
+    auto& s = bindings[freeSlot];
+    s.type.store (-1);
+    s.channel.store (b.channel); s.number.store (b.number); s.action.store (b.action);
+    s.target.store (b.target); s.mode.store (b.mode);
+    s.type.store (b.type);
+    mapVersion.fetch_add (1);
+    return freeSlot;
+}
+
+bool NoirProcessor::getBinding (int i, MidiBinding& out) const
+{
+    if (i < 0 || i >= MaxBindings) return false;
+    const auto& s = bindings[i];
+    out.type = s.type.load();
+    if (out.type < 0) return false;
+    out.channel = s.channel.load(); out.number = s.number.load(); out.action = s.action.load();
+    out.target = s.target.load(); out.mode = s.mode.load();
+    return true;
+}
+
+void NoirProcessor::removeBinding (int i)
+{
+    if (i < 0 || i >= MaxBindings) return;
+    bindings[i].type.store (-1);
+    mapVersion.fetch_add (1);
+}
+
+int NoirProcessor::getCcFor (Id id) const
+{
+    for (const auto& s : bindings)
+        if (s.type.load() == MtCC && s.action.load() == ActParam && s.target.load() == (int) id) return s.number.load();
+    return -1;
+}
+
+void NoirProcessor::clearMidiFor (Id id)
+{
+    for (auto& s : bindings)
+        if (s.type.load() >= 0 && s.action.load() == ActParam && s.target.load() == (int) id) s.type.store (-1);
+    mapVersion.fetch_add (1);
+}
+
+void NoirProcessor::clearAllMidi()
+{
+    for (auto& s : bindings) s.type.store (-1);
+    mapVersion.fetch_add (1);
+}
+
+std::array<int, 128> NoirProcessor::midiMapSnapshot() const
+{
+    std::array<int, 128> a;
+    a.fill (-1);
+    for (const auto& s : bindings)
+        if (s.type.load() == MtCC && s.action.load() == ActParam) a[(size_t) juce::jlimit (0, 127, s.number.load())] = s.target.load();
+    return a;
+}
+
+void NoirProcessor::applyBinding (const MidiBinding& b, int type, int value, bool pressed)
+{
+    const float val = (float) value / 127.0f;
+    const bool isPress = type == MtNote ? pressed : (type == MtCC ? value >= 64 : true);
+    const bool risingEdge = isPress && (type != MtCC || ! ccWasDown[juce::jlimit (0, 127, b.number)]);
+    if (type == MtCC) ccWasDown[juce::jlimit (0, 127, b.number)] = isPress;
+    const int sel = selectedLoopTrack();
+
+    switch (b.action)
+    {
+        case ActPresetNext: if (risingEdge) { presetDelta.fetch_add (1); } break;
+        case ActPresetPrev: if (risingEdge) { presetDelta.fetch_add (-1); } break;
+        case ActLoopCycle:
+            if (risingEdge)
+            {
+                const int st = looper.uiState (sel);
+                doLoopCommand (sel, st == 0 ? LcRecord : (st == 4 ? LcPlay : (st == 2 ? LcOverdub : LcPlay)));
+                if (st == 0 || st == 4 || st == 2) setParamNormalised (LoopOn, 1.0f);
+            }
+            break;
+        case ActLoopRec:  if (risingEdge) doLoopCommand (sel, LcRecord);  break;
+        case ActLoopPlay: if (risingEdge) doLoopCommand (sel, LcPlay);    break;
+        case ActLoopDub:  if (risingEdge) doLoopCommand (sel, LcOverdub); break;
+        case ActLoopStop: if (risingEdge) doLoopCommand (sel, LcStop);    break;
+        case ActLoopUndo: if (risingEdge) doLoopCommand (sel, LcUndo);    break;
+        case ActLoopClear: if (risingEdge) doLoopCommand (sel, LcClear);  break;
+        case ActLoopStopAll: if (risingEdge) doLoopCommand (sel, LcStopAll); break;
+        case ActTrackNext: if (risingEdge) setParamNormalised (LoopTrack, (float) ((sel + 1) % 4) / 3.0f); break;
+        case ActTrackPrev: if (risingEdge) setParamNormalised (LoopTrack, (float) ((sel + 3) % 4) / 3.0f); break;
+
+        case ActParam:
+        {
+            const int target = b.target;
+            if (target < 0 || target >= NumParams) break;
+            const auto& info = kParams[target];
+            int mode = b.mode;
+            if (mode == MmAuto)
+            {
+                if (type == MtCC) mode = info.kind == 0 ? MmAbsolute : MmMomentary;
+                else mode = MmToggle;                                  // notes / program change: footswitches toggle
+            }
+
+            if (mode == MmAbsolute)
+            {
+                if (info.kind == 1) setParamNormalised (target, val >= 0.5f ? 1.0f : 0.0f);
+                else if (info.kind == 2)
+                {
+                    const int n = choiceCount (target);
+                    setParamNormalised (target, n > 1 ? std::round (val * (float) (n - 1)) / (float) (n - 1) : 0.0f);
+                }
+                else setParamNormalised (target, val);
+            }
+            else if (mode == MmMomentary)
+            {
+                if (info.kind == 1) setParamNormalised (target, isPress ? 1.0f : 0.0f);
+                else if (type == MtCC) setParamNormalised (target, val);
+            }
+            else if (risingEdge)   // toggle
+            {
+                const float cur = param ((Id) target) != nullptr ? param ((Id) target)->getValue() : 0.0f;
+                if (info.kind == 2)
+                {
+                    const int n = choiceCount (target);
+                    const int idx = juce::roundToInt (cur * (float) (n - 1));
+                    setParamNormalised (target, n > 1 ? (float) ((idx + 1) % n) / (float) (n - 1) : 0.0f);
+                }
+                else setParamNormalised (target, cur > 0.5f ? 0.0f : 1.0f);
+            }
+            break;
+        }
+        default: break;
+    }
+}
+
+int NoirProcessor::choiceCount (int paramIndex)
+{
+    static int counts[NumParams] = {};
+    int& c = counts[paramIndex];
+    if (c == 0)
+    {
+        const char* p = kParams[paramIndex].choices;
+        c = 1;
+        for (; p != nullptr && *p; ++p) if (*p == '|') ++c;
+    }
+    return c;
 }
 
 void NoirProcessor::handleMidi (juce::MidiBuffer& midi)
@@ -795,45 +1068,51 @@ void NoirProcessor::handleMidi (juce::MidiBuffer& midi)
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
+        int type = -1, number = 0, value = 0;
+        bool pressed = true;
 
-        if (m.isController())
+        if (m.isController())             { type = MtCC;      number = m.getControllerNumber(); value = m.getControllerValue(); }
+        else if (m.isNoteOn())            { type = MtNote;    number = m.getNoteNumber();       value = m.getVelocity(); }
+        else if (m.isNoteOff())           { type = MtNote;    number = m.getNoteNumber();       value = 0; pressed = false; }
+        else if (m.isProgramChange())     { type = MtProgram; number = m.getProgramChangeNumber(); value = 127; }
+        if (type < 0) continue;
+
+        const int ch = m.getChannel();
         {
-            const int cc = m.getControllerNumber();
-            const float val = (float) m.getControllerValue() / 127.0f;
-
-            const int learn = learnTarget.exchange (-1);
-            if (learn >= 0)
-            {
-                for (auto& c : ccMap) if (c.load() == learn) c.store (-1);   // one CC per control
-                ccMap[cc].store (learn);
-                mapVersion.fetch_add (1);
-            }
-
-            const int target = ccMap[cc].load();
-            if (target < 0) continue;
-
-            const auto& info = kParams[target];
-            if (info.kind == 1)      setParamNormalised (target, val >= 0.5f ? 1.0f : 0.0f);
-            else if (info.kind == 2)
-            {
-                const int n = juce::StringArray::fromTokens (info.choices, "|", "").size();
-                setParamNormalised (target, n > 1 ? std::round (val * (float) (n - 1)) / (float) (n - 1) : 0.0f);
-            }
-            else                     setParamNormalised (target, val);
+            const int c = midiCount.load();
+            midiLog[c & 15].store ((uint32_t) type << 24 | (uint32_t) ch << 16 | (uint32_t) number << 8 | (uint32_t) value);
+            midiCount.store (c + 1);
         }
-        else if (m.isProgramChange())
+
+        if (learnActive.load() && (pressed || type == MtCC))
         {
-            pendingPreset.store (m.getProgramChangeNumber());
-            triggerAsyncUpdate();
+            if (type == MtCC && value < 1 && learnAction.load() != ActParam) continue;
+            MidiBinding b;
+            b.type = type; b.channel = 0; b.number = number;
+            b.action = learnAction.load(); b.target = learnTarget.load(); b.mode = learnMode.load();
+            // a CC knob that is being turned must not create dozens of bindings: learn on the first message only
+            learnActive.store (false);
+            addBinding (b);
+            continue;
         }
+
+        bool handled = false;
+        for (const auto& s : bindings)
+        {
+            if (s.type.load() != type || s.number.load() != number) continue;
+            const int bc = s.channel.load();
+            if (bc != 0 && bc != ch) continue;
+            MidiBinding b;
+            b.type = type; b.channel = bc; b.number = number;
+            b.action = s.action.load(); b.target = s.target.load(); b.mode = s.mode.load();
+            applyBinding (b, type, value, pressed);
+            handled = true;
+        }
+
+        if (! handled && type == MtProgram)
+            pendingPreset.store (number);
     }
     midi.clear();
-}
-
-void NoirProcessor::handleAsyncUpdate()
-{
-    const int p = pendingPreset.exchange (-1);
-    if (p >= 0) applyPreset (*this, p);
 }
 
 void NoirProcessor::applyMacros()
@@ -850,31 +1129,6 @@ void NoirProcessor::applyMacros()
             if (p >= 0) setParamNormalised (p, l.lo.load() + (l.hi.load() - l.lo.load()) * mv);
         }
     }
-}
-
-int NoirProcessor::getCcFor (Id id) const
-{
-    for (int c = 0; c < 128; ++c) if (ccMap[c].load() == (int) id) return c;
-    return -1;
-}
-
-void NoirProcessor::clearMidiFor (Id id)
-{
-    for (auto& c : ccMap) if (c.load() == (int) id) c.store (-1);
-    mapVersion.fetch_add (1);
-}
-
-void NoirProcessor::clearAllMidi()
-{
-    for (auto& c : ccMap) c.store (-1);
-    mapVersion.fetch_add (1);
-}
-
-std::array<int, 128> NoirProcessor::midiMapSnapshot() const
-{
-    std::array<int, 128> a {};
-    for (int i = 0; i < 128; ++i) a[(size_t) i] = ccMap[i].load();
-    return a;
 }
 
 bool NoirProcessor::assignMacro (int macro, Id param)
@@ -942,8 +1196,10 @@ void NoirProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("order", parts.joinIntoString (","), nullptr);
 
     juce::StringArray midiParts, macroParts;
-    for (int c = 0; c < 128; ++c)
-        if (ccMap[c].load() >= 0) midiParts.add (juce::String (c) + ":" + juce::String (ccMap[c].load()));
+    for (int i = 0; i < MaxBindings; ++i)
+        if (MidiBinding b; getBinding (i, b))
+            midiParts.add (juce::String (b.type) + ":" + juce::String (b.channel) + ":" + juce::String (b.number) + ":"
+                           + juce::String (b.action) + ":" + juce::String (b.target) + ":" + juce::String (b.mode));
     for (int m = 0; m < NumMacros; ++m)
         for (int i = 0; i < LinksPerMacro; ++i)
         {
@@ -951,7 +1207,7 @@ void NoirProcessor::getStateInformation (juce::MemoryBlock& destData)
             if (l.param >= 0)
                 macroParts.add (juce::String (m) + ":" + juce::String (l.param) + ":" + juce::String (l.lo, 4) + ":" + juce::String (l.hi, 4));
         }
-    state.setProperty ("midimap", midiParts.joinIntoString (","), nullptr);
+    state.setProperty ("midibind", midiParts.joinIntoString (","), nullptr);
     state.setProperty ("macros", macroParts.joinIntoString (","), nullptr);
 
     if (auto xml = state.createXml())
@@ -967,18 +1223,24 @@ void NoirProcessor::setStateInformation (const void* data, int size)
             auto tree = juce::ValueTree::fromXml (*xml);
             const auto path = tree.getProperty ("irPath").toString();
             const auto orderStr = tree.getProperty ("order").toString();
-            const auto midiStr = tree.getProperty ("midimap").toString();
+            const auto midiStr = tree.getProperty ("midibind").toString();
+            const auto legacyMidi = tree.getProperty ("midimap").toString();
             const auto macroStr = tree.getProperty ("macros").toString();
             apvts.replaceState (tree);
 
-            for (auto& c : ccMap) c.store (-1);
+            for (auto& b : bindings) b.type.store (-1);
             for (auto& row : links) for (auto& l : row) l.param.store (-1);
             for (const auto& item : juce::StringArray::fromTokens (midiStr, ",", ""))
             {
+                const auto f = juce::StringArray::fromTokens (item, ":", "");
+                if (f.size() == 6)
+                    addBinding ({ f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue(), f[4].getIntValue(), f[5].getIntValue() });
+            }
+            for (const auto& item : juce::StringArray::fromTokens (legacyMidi, ",", ""))   // sessions saved before v1.0.7
+            {
                 const auto kv = juce::StringArray::fromTokens (item, ":", "");
-                if (kv.size() == 2 && kv[0].getIntValue() >= 0 && kv[0].getIntValue() < 128
-                    && kv[1].getIntValue() >= 0 && kv[1].getIntValue() < NumParams)
-                    ccMap[kv[0].getIntValue()].store (kv[1].getIntValue());
+                if (kv.size() == 2 && kv[1].getIntValue() >= 0 && kv[1].getIntValue() < NumParams)
+                    addBinding ({ MtCC, 0, kv[0].getIntValue(), ActParam, kv[1].getIntValue(), MmAuto });
             }
             for (const auto& item : juce::StringArray::fromTokens (macroStr, ",", ""))
             {
