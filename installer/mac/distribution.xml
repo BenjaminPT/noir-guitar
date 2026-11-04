@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Noir Guitar</title>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <choices-outline>
+        <line choice="vst3"/>
+        <line choice="au"/>
+        <line choice="app"/>
+    </choices-outline>
+    <choice id="vst3" title="VST3 plug-in" description="For Reaper, Ableton Live, Bitwig, Studio One, Cubase, FL Studio and other VST3 hosts.">
+        <pkg-ref id="com.noiraudio.noirguitar.vst3"/>
+    </choice>
+    <choice id="au" title="Audio Unit plug-in" description="For Logic Pro, GarageBand and MainStage.">
+        <pkg-ref id="com.noiraudio.noirguitar.au"/>
+    </choice>
+    <choice id="app" title="Standalone app" description="Play without a DAW: pick your audio interface and go. Installs to Applications.">
+        <pkg-ref id="com.noiraudio.noirguitar.app"/>
+    </choice>
+    <pkg-ref id="com.noiraudio.noirguitar.vst3" version="1.0" onConclusion="none">vst3.pkg</pkg-ref>
+    <pkg-ref id="com.noiraudio.noirguitar.au" version="1.0" onConclusion="none">au.pkg</pkg-ref>
+    <pkg-ref id="com.noiraudio.noirguitar.app" version="1.0" onConclusion="none">app.pkg</pkg-ref>
+</installer-gui-script>

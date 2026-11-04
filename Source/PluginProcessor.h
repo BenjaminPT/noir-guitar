@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include "Dsp.h"
 #include "Effects.h"
@@ -115,6 +116,31 @@ public:
 
     void loadPreset (int index);
     std::atomic<int> currentPreset { -1 };
+
+    // ---- user presets (plain XML files in Documents/Noir Guitar, so they can be copied between machines)
+    static juce::File userRoot();
+    static juce::File chainPresetDir();
+    static juce::File pedalPresetDir (int slot);
+    static juce::File irLibraryDir();
+    static juce::Array<juce::File> listFiles (const juce::File& dir, const juce::String& pattern);
+    static bool isPresetParam (int id);
+    static int  slotOfParam (int id);
+    bool saveChainPreset (const juce::String& name);
+    bool loadChainPreset (const juce::File& file);
+    bool savePedalPreset (int slot, const juce::String& name);
+    bool loadPedalPreset (int slot, const juce::File& file);
+    void resetPedal (int slot);
+    juce::File copyIntoIrLibrary (const juce::File& ir) const;
+    juce::String currentUserPreset;        // message thread only; empty when a factory preset / nothing is loaded
+    std::atomic<int> presetListVersion { 0 };
+
+    // Set by the standalone window (null inside a plug-in host): lets the editor draw the window buttons itself.
+    struct StandaloneHost
+    {
+        std::function<void()> minimise, toggleMaximise, close, audioSettings, toggleMute;
+        std::function<bool()> isMuted;
+    };
+    StandaloneHost* standalone = nullptr;
 
     // performance
     std::atomic<float> cpuLoad { 0.0f };

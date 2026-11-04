@@ -853,6 +853,7 @@ void NoirProcessor::loadPreset (int index)
 {
     if (index < 0 || index >= (int) factoryPresets().size()) return;
     currentPreset.store (index);
+    currentUserPreset.clear();
     applyPreset (*this, index);
 }
 
@@ -1232,7 +1233,7 @@ void NoirProcessor::setStateInformation (const void* data, int size)
             auto tree = juce::ValueTree::fromXml (*xml);
             const auto path = tree.getProperty ("irPath").toString();
             const auto orderStr = tree.getProperty ("order").toString();
-            uiTheme.store (juce::jlimit (0, 1, (int) tree.getProperty ("theme", 0)));
+            uiTheme.store (juce::jlimit (0, 5, (int) tree.getProperty ("theme", 0)));
             const auto midiStr = tree.getProperty ("midibind").toString();
             const auto legacyMidi = tree.getProperty ("midimap").toString();
             const auto macroStr = tree.getProperty ("macros").toString();
@@ -1279,6 +1280,177 @@ void NoirProcessor::setStateInformation (const void* data, int size)
                 loadIR (juce::File (path));
         }
     }
+}
+
+//==============================================================================
+// User presets
+juce::File NoirProcessor::userRoot()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Noir Guitar");
+}
+juce::File NoirProcessor::chainPresetDir() { return userRoot().getChildFile ("Presets"); }
+juce::File NoirProcessor::irLibraryDir()   { return userRoot().getChildFile ("Impulse Responses"); }
+juce::File NoirProcessor::pedalPresetDir (int slot)
+{
+    return userRoot().getChildFile ("Pedals").getChildFile (juce::File::createLegalFileName (kSlotShort[juce::jlimit (0, (int) NumSlots - 1, slot)]));
+}
+
+juce::Array<juce::File> NoirProcessor::listFiles (const juce::File& dir, const juce::String& pattern)
+{
+    auto files = dir.findChildFiles (juce::File::findFiles, false, pattern);
+    files.sort();
+    return files;
+}
+
+bool NoirProcessor::isPresetParam (int id)
+{
+    if (id < 0 || id >= NumParams) return false;
+    if (id == Power || id == InGain || id == OutGain || id == TunerOn || id == TunerRef) return false;
+    if (id == LoopMode || id == LoopTrack || (id >= LoopMute1 && id <= LoopMute4)) return false;
+    if (id >= Macro1 && id <= Macro8) return false;
+    if (id == BpmManual || id == HostSync || id == LoopFollow || id == LoopQuant) return false;
+    return true;
+}
+
+int NoirProcessor::slotOfParam (int id)
+{
+    struct R { int a, b, slot; };
+    static const R r[] = {
+        { GateOn, GateThr, SGate }, { CompOn, CompAtk, SComp }, { WahOn, WahQ, SWah }, { PitchOn, PitchMix, SPitch },
+        { BoostOn, BoostGain, SBoost }, { DrvOn, DrvLevel, SDrive }, { AmpOn, AmpPres, SAmp }, { CabOn, CabType, SCab },
+        { EqOn, Eb8Q, SEq }, { M1On, M1Mix, SMod1 }, { M2On, M2Mix, SMod2 }, { LoOn, LoMix, SLofi },
+        { DlyOn, DlyMix, SDelay }, { RevOn, RevMix, SReverb }, { LoopOn, LoopOn, SLooper }, { LoopLevel, LoopLevel, SLooper },
+        { LoopSpeed, LoopRev, SLooper }, { VocOn, VocMix, SVoc }, { TbOn, TbMix, STalk }, { GrOn, GrMix, SGran },
+        { FrzOn, FrzMix, SFreeze }, { GltOn, GltMix, SGlitch },
+        { DlySync, DlySync, SDelay }, { M1Sync, M1Sync, SMod1 }, { M2Sync, M2Sync, SMod2 }, { GltSync, GltSync, SGlitch } };
+    for (const auto& x : r)
+        if (id >= x.a && id <= x.b) return x.slot;
+    return -1;
+}
+
+juce::File NoirProcessor::copyIntoIrLibrary (const juce::File& ir) const
+{
+    if (! ir.existsAsFile() || ir.isAChildOf (userRoot())) return ir;       // already inside the library
+    auto dir = irLibraryDir();
+    if (! dir.createDirectory().wasOk()) return ir;
+    auto dest = dir.getChildFile (ir.getFileName());
+    if (dest.existsAsFile() && dest.getSize() == ir.getSize()) return dest;
+    return ir.copyFileTo (dest) ? dest : ir;
+}
+
+static void writeParams (juce::XmlElement& x, juce::AudioProcessorValueTreeState& st, int slot)
+{
+    for (int i = 0; i < NumParams; ++i)
+    {
+        if (! NoirProcessor::isPresetParam (i)) continue;
+        if (slot >= 0 && NoirProcessor::slotOfParam (i) != slot) continue;
+        auto* e = x.createNewChildElement ("P");
+        e->setAttribute ("id", kParams[i].id);
+        e->setAttribute ("v", (double) st.getRawParameterValue (kParams[i].id)->load());
+    }
+}
+
+bool NoirProcessor::saveChainPreset (const juce::String& rawName)
+{
+    const auto name = rawName.trim();
+    if (name.isEmpty()) return false;
+    auto dir = chainPresetDir();
+    if (! dir.createDirectory().wasOk()) return false;
+
+    juce::XmlElement x ("NoirPreset");
+    x.setAttribute ("name", name);
+    if (irPath.isNotEmpty())
+        x.setAttribute ("ir", copyIntoIrLibrary (juce::File (irPath)).getFullPathName());
+    juce::StringArray parts;
+    for (int s : getChainOrder()) parts.add (juce::String (s));
+    x.setAttribute ("order", parts.joinIntoString (","));
+    writeParams (x, apvts, -1);
+
+    if (! x.writeTo (dir.getChildFile (juce::File::createLegalFileName (name) + ".noirpreset"))) return false;
+    currentUserPreset = name;
+    currentPreset.store (-1);
+    presetListVersion.fetch_add (1);
+    return true;
+}
+
+bool NoirProcessor::loadChainPreset (const juce::File& file)
+{
+    auto x = juce::XmlDocument::parse (file);
+    if (x == nullptr || ! x->hasTagName ("NoirPreset")) return false;
+
+    for (int i = 0; i < NumParams; ++i)
+        if (isPresetParam (i)) setParamValue ((Id) i, kParams[i].def);
+
+    for (auto* e : x->getChildWithTagNameIterator ("P"))
+    {
+        const auto id = e->getStringAttribute ("id");
+        for (int i = 0; i < NumParams; ++i)
+            if (id == kParams[i].id)
+            {
+                if (isPresetParam (i)) setParamValue ((Id) i, (float) e->getDoubleAttribute ("v"));
+                break;
+            }
+    }
+
+    Order o = defaultOrder();
+    const auto toks = juce::StringArray::fromTokens (x->getStringAttribute ("order"), ",", "");
+    if (toks.size() == NumSlots)
+        for (int i = 0; i < NumSlots; ++i) o[(size_t) i] = juce::jlimit (0, (int) NumSlots - 1, toks[i].getIntValue());
+    setChainOrder (o);
+
+    const auto ir = x->getStringAttribute ("ir");
+    if (ir.isNotEmpty() && juce::File (ir).existsAsFile()) loadIR (juce::File (ir));
+    else if (ir.isEmpty()) clearIR();
+
+    currentUserPreset = x->getStringAttribute ("name", file.getFileNameWithoutExtension());
+    currentPreset.store (-1);
+    return true;
+}
+
+bool NoirProcessor::savePedalPreset (int slot, const juce::String& rawName)
+{
+    const auto name = rawName.trim();
+    if (name.isEmpty() || slot < 0 || slot >= NumSlots) return false;
+    auto dir = pedalPresetDir (slot);
+    if (! dir.createDirectory().wasOk()) return false;
+
+    juce::XmlElement x ("NoirPedal");
+    x.setAttribute ("name", name);
+    x.setAttribute ("slot", kSlotShort[slot]);
+    if (slot == SCab && irPath.isNotEmpty())
+        x.setAttribute ("ir", copyIntoIrLibrary (juce::File (irPath)).getFullPathName());
+    writeParams (x, apvts, slot);
+    return x.writeTo (dir.getChildFile (juce::File::createLegalFileName (name) + ".noirpedal"));
+}
+
+bool NoirProcessor::loadPedalPreset (int slot, const juce::File& file)
+{
+    auto x = juce::XmlDocument::parse (file);
+    if (x == nullptr || ! x->hasTagName ("NoirPedal") || x->getStringAttribute ("slot") != juce::String (kSlotShort[slot]))
+        return false;
+
+    for (auto* e : x->getChildWithTagNameIterator ("P"))
+    {
+        const auto id = e->getStringAttribute ("id");
+        for (int i = 0; i < NumParams; ++i)
+            if (id == kParams[i].id)
+            {
+                if (isPresetParam (i) && slotOfParam (i) == slot) setParamValue ((Id) i, (float) e->getDoubleAttribute ("v"));
+                break;
+            }
+    }
+    setParamValue (kSlotOn[slot], 1.0f);                       // a loaded pedal preset is ready to play
+
+    const auto ir = x->getStringAttribute ("ir");
+    if (slot == SCab && ir.isNotEmpty() && juce::File (ir).existsAsFile()) loadIR (juce::File (ir));
+    return true;
+}
+
+void NoirProcessor::resetPedal (int slot)
+{
+    for (int i = 0; i < NumParams; ++i)
+        if (isPresetParam (i) && slotOfParam (i) == slot && i != (int) kSlotOn[slot])
+            setParamValue ((Id) i, kParams[i].def);
 }
 
 juce::AudioProcessorEditor* NoirProcessor::createEditor() { return new NoirEditor (*this); }

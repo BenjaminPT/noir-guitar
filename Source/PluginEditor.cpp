@@ -10,17 +10,37 @@ const juce::Colour ink { 0xff0b0b0d };   // dark text on bright surfaces
 void applyPalette (int theme)
 {
     auto C = [] (juce::uint32 v) { return juce::Colour (v); };
-    if (theme == 0)   // Pop Stompbox: bold flat colours
+    switch (theme)
     {
-        cDyn = C (0xfff8d21b); cFilt = C (0xffb79cff); cPitch = C (0xffff8fc8); cGain = C (0xffff9f6b); cAmp = C (0xff57e26b);
-        cEq = C (0xffff8fc8);  cMod = C (0xff1cc8e8);  cLofi = C (0xffc6f135);  cTime = C (0xffb79cff); cVoice = C (0xffffd166);
-        cGrain = C (0xff1cc8e8); cGlit = C (0xffff6b5a); cLoop = C (0xffff6b5a); cOut = C (0xfff4f1ea);
-    }
-    else              // Retro Amp: muted enamel colours
-    {
-        cDyn = C (0xff3f7f78); cFilt = C (0xff7a5a8f); cPitch = C (0xffa84a6e); cGain = C (0xffb8742a); cAmp = C (0xffa3382f);
-        cEq = C (0xff5a5340);  cMod = C (0xff3d6f94);  cLofi = C (0xff6b8a3a);  cTime = C (0xff55608f); cVoice = C (0xff9a5f3a);
-        cGrain = C (0xff2f7f8a); cGlit = C (0xffb3342b); cLoop = C (0xffc2982d); cOut = C (0xff6b624d);
+        case 0:   // Pop Stompbox: bold flat colours
+            cDyn = C (0xfff8d21b); cFilt = C (0xffb79cff); cPitch = C (0xffff8fc8); cGain = C (0xffff9f6b); cAmp = C (0xff57e26b);
+            cEq = C (0xffff8fc8);  cMod = C (0xff1cc8e8);  cLofi = C (0xffc6f135);  cTime = C (0xffb79cff); cVoice = C (0xffffd166);
+            cGrain = C (0xff1cc8e8); cGlit = C (0xffff6b5a); cLoop = C (0xffff6b5a); cOut = C (0xfff4f1ea);
+            break;
+        case 1:   // Retro Amp: muted enamel colours
+            cDyn = C (0xff3f7f78); cFilt = C (0xff7a5a8f); cPitch = C (0xffa84a6e); cGain = C (0xffb8742a); cAmp = C (0xffa3382f);
+            cEq = C (0xff5a5340);  cMod = C (0xff3d6f94);  cLofi = C (0xff6b8a3a);  cTime = C (0xff55608f); cVoice = C (0xff9a5f3a);
+            cGrain = C (0xff2f7f8a); cGlit = C (0xffb3342b); cLoop = C (0xffc2982d); cOut = C (0xff6b624d);
+            break;
+        case 2:   // Pro Studio
+            cDyn = C (0xff3ddc97); cFilt = C (0xff8b7bff); cPitch = C (0xffffb454); cGain = C (0xffff6b6b); cAmp = C (0xffffd166);
+            cEq = C (0xff4cc2ff);  cMod = C (0xff4cc2ff);  cLofi = C (0xffffb454);  cTime = C (0xff8b7bff); cVoice = C (0xffffd166);
+            cGrain = C (0xff3ddc97); cGlit = C (0xffff6b6b); cLoop = C (0xffff6b6b); cOut = C (0xffe6e8ea);
+            break;
+        case 3:   // Neon Night
+            cDyn = C (0xffc6ff00); cFilt = C (0xff9d6bff); cPitch = C (0xffff2bd6); cGain = C (0xffff9100); cAmp = C (0xffff2b4d);
+            cEq = C (0xff00f0ff);  cMod = C (0xff00f0ff);  cLofi = C (0xffc6ff00);  cTime = C (0xff9d6bff); cVoice = C (0xffff9100);
+            cGrain = C (0xff00f0ff); cGlit = C (0xffff2b4d); cLoop = C (0xffff2bd6); cOut = C (0xffeeeaff);
+            break;
+        case 4:   // Swiss Mono: black and one signal colour
+            cDyn = cFilt = cPitch = cEq = cMod = cLofi = cTime = cVoice = cGrain = cOut = C (0xff0b0b0b);
+            cGain = cAmp = cLoop = cGlit = C (0xffff4b1f);
+            break;
+        default:  // Aurora
+            cDyn = C (0xff7cf4d4); cFilt = C (0xffa78bfa); cPitch = C (0xffffb3c7); cGain = C (0xffffd479); cAmp = C (0xff8ff0a4);
+            cEq = C (0xff5eb1ff);  cMod = C (0xff5eb1ff);  cLofi = C (0xffffd479);  cTime = C (0xffa78bfa); cVoice = C (0xffffb3c7);
+            cGrain = C (0xff7cf4d4); cGlit = C (0xffff8a8a); cLoop = C (0xffff8a8a); cOut = C (0xffeaf0fa);
+            break;
     }
     const juce::Colour c[NumSlots] = { cDyn, cDyn, cFilt, cPitch, cGain, cGain, cAmp, cAmp, cEq, cVoice, cVoice,
                                        cMod, cMod, cLofi, cGlit, cGrain, cGrain, cTime, cTime, cLoop };
@@ -37,20 +57,35 @@ NoirLookAndFeel::NoirLookAndFeel() { applyTheme (0); }
 
 void NoirLookAndFeel::applyTheme (int t)
 {
+    t = juce::jlimit (0, NumThemes - 1, t);
     theme = t;
-    if (t == 0)
+    auto C = [] (juce::uint32 v) { return juce::Colour (v); };
+    switch (t)
     {
-        bg = juce::Colour (0xff121212); panel = juce::Colour (0xff171717); line = juce::Colour (0xff2c2c2c);
-        text = juce::Colour (0xfff4f1ea); dim = juce::Colour (0xff9a968d); accent = juce::Colour (0xffff9f6b);
-        inset = juce::Colour (0xff141414); insetLine = juce::Colour (0xff2c2c2c);
-        hdrText = text; hdrDim = dim; gold = juce::Colour (0xffff9f6b);
-    }
-    else
-    {
-        bg = juce::Colour (0xffd9cfb8); panel = juce::Colour (0xffefe6d2); line = juce::Colour (0xffbfb396);
-        text = juce::Colour (0xff1d1a15); dim = juce::Colour (0xff6b624d); accent = juce::Colour (0xffc9923a);
-        inset = juce::Colour (0xff1c1a17); insetLine = juce::Colour (0xff4a443a);
-        hdrText = juce::Colour (0xffefe6d2); hdrDim = juce::Colour (0xffa89c83); gold = juce::Colour (0xffd9b26a);
+        case 0:
+            bg = C (0xff121212); panel = C (0xff171717); line = C (0xff2c2c2c); text = C (0xfff4f1ea); dim = C (0xff9a968d); accent = C (0xffff9f6b);
+            inset = C (0xff141414); insetLine = C (0xff2c2c2c); hdrText = text; hdrDim = dim; gold = C (0xffff9f6b);
+            style = 0; knobStyle = 0; corner = 16.0f; break;
+        case 1:
+            bg = C (0xffd9cfb8); panel = C (0xffefe6d2); line = C (0xffbfb396); text = C (0xff1d1a15); dim = C (0xff6b624d); accent = C (0xffc9923a);
+            inset = C (0xff1c1a17); insetLine = C (0xff4a443a); hdrText = C (0xffefe6d2); hdrDim = C (0xffa89c83); gold = C (0xffd9b26a);
+            style = 1; knobStyle = 1; corner = 9.0f; break;
+        case 2:
+            bg = C (0xff101215); panel = C (0xff181b1f); line = C (0xff2e3238); text = C (0xffe6e8ea); dim = C (0xff8a919a); accent = C (0xff4cc2ff);
+            inset = C (0xff0c0e10); insetLine = C (0xff2e3238); hdrText = text; hdrDim = dim; gold = accent;
+            style = 2; knobStyle = 2; corner = 10.0f; break;
+        case 3:
+            bg = C (0xff07070d); panel = C (0xff0e0b1f); line = C (0xff2b2653); text = C (0xffeeeaff); dim = C (0xff8b86c9); accent = C (0xff00f0ff);
+            inset = C (0xff0a0816); insetLine = C (0xff3a3470); hdrText = text; hdrDim = dim; gold = C (0xffff2bd6);
+            style = 3; knobStyle = 2; corner = 8.0f; break;
+        case 4:
+            bg = C (0xfff2f2f2); panel = C (0xfff2f2f2); line = C (0xff0b0b0b); text = C (0xff0b0b0b); dim = C (0xff6b6b6b); accent = C (0xffff4b1f);
+            inset = C (0xffffffff); insetLine = C (0xff0b0b0b); hdrText = text; hdrDim = dim; gold = C (0xffff4b1f);
+            style = 0; knobStyle = 2; corner = 2.0f; break;
+        default:
+            bg = C (0xff0b0e14); panel = C (0xff12161f); line = C (0xff222a38); text = C (0xffeaf0fa); dim = C (0xff7f8ba0); accent = C (0xff7cf4d4);
+            inset = C (0xff0d1118); insetLine = C (0xff273042); hdrText = text; hdrDim = dim; gold = C (0xff7cf4d4);
+            style = 2; knobStyle = 2; corner = 14.0f; break;
     }
     applyPalette (t);
 
@@ -85,7 +120,29 @@ void NoirLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, 
     const float amt = (float) (double) s.getProperties().getWithDefault ("amt", 1.0);   // 1 = pedal is on (filled surface)
     const float kr = radius * 0.72f;
 
-    if (theme == 0)
+    if (knobStyle == 2)   // arc knob: value ring + pointer
+    {
+        const auto base = style == 0 ? fill.interpolatedWith (onAccent (fill), amt) : fill;
+        const float rr = radius * 0.80f;
+        juce::Path track, val;
+        track.addCentredArc (c.x, c.y, rr, rr, 0.0f, startAngle, endAngle, true);
+        val.addCentredArc (c.x, c.y, rr, rr, 0.0f, startAngle, angle, true);
+        g.setColour (base.withAlpha (0.28f));
+        g.strokePath (track, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (style == 3)
+        {
+            g.setColour (base.withAlpha (0.18f * amt));
+            g.strokePath (val, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        g.setColour (hot ? base.brighter (0.2f) : base);
+        g.strokePath (val, juce::PathStrokeType (3.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        juce::Path tick;
+        tick.startNewSubPath (c.x + std::sin (angle) * rr * 0.30f, c.y - std::cos (angle) * rr * 0.30f);
+        tick.lineTo (c.x + std::sin (angle) * rr * 0.68f, c.y - std::cos (angle) * rr * 0.68f);
+        g.setColour (style == 0 ? base : text);
+        g.strokePath (tick, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    else if (knobStyle == 0)
     {
         const auto tickCol = fill.interpolatedWith (ink, amt);
         for (int i = 0; i <= 10; ++i)
@@ -157,7 +214,7 @@ void NoirLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b
     if (b.getProperties().contains ("power"))
     {
         const auto c = r.reduced (1.0f);
-        const auto pc = theme == 0 ? juce::Colour (0xffff6b5a) : juce::Colour (0xffb3342b);
+        const auto pc = theme == 1 ? juce::Colour (0xffb3342b) : (theme == 4 ? juce::Colour (0xffff4b1f) : juce::Colour (0xffff6b5a));
         const float t = (float) (juce::Time::getMillisecondCounterHiRes() * 0.0025);
         if (on)
         {
@@ -504,7 +561,8 @@ juce::Colour eqBandColour (int b)
 {
     static const juce::uint32 pop[8]   = { 0xffff6b5a, 0xffff9f6b, 0xfff8d21b, 0xffc6f135, 0xff57e26b, 0xff1cc8e8, 0xffb79cff, 0xffff8fc8 };
     static const juce::uint32 retro[8] = { 0xffe07a4f, 0xffe9a23b, 0xffd9c34a, 0xff9fc15a, 0xff5fb59a, 0xff5aa3d0, 0xff9a86d6, 0xffd67aa8 };
-    return juce::Colour ((L::theme == 0 ? pop : retro)[juce::jlimit (0, 7, b)]);
+    static const juce::uint32 swiss[8] = { 0xffd7263d, 0xffe4572e, 0xffb58900, 0xff5b8c00, 0xff1b998b, 0xff2e86ab, 0xff6a4c93, 0xffc2185b };
+    return juce::Colour ((L::theme == 1 ? retro : (L::theme == 4 ? swiss : pop))[juce::jlimit (0, 7, b)]);
 }
 }
 
@@ -782,7 +840,7 @@ void EqPanel::paint (juce::Graphics& g)
         }
         fill.lineTo (graph.getRight(), graph.getBottom());
         fill.closeSubPath();
-        const auto sc = retro ? juce::Colour (0xffe9a23b) : juce::Colour (0xff8fa6c9);
+        const auto sc = retro ? juce::Colour (0xffe9a23b) : (L::theme == 0 ? juce::Colour (0xff8fa6c9) : L::accent);
         juce::ColourGradient grad (sc.withAlpha (0.38f), 0.0f, graph.getY(), sc.withAlpha (0.04f), 0.0f, graph.getBottom(), false);
         g.setGradientFill (grad);
         g.fillPath (fill);
@@ -990,6 +1048,27 @@ void EqPanel::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelD
 }
 
 //==============================================================================
+void WinButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    const auto r = getLocalBounds().toFloat().reduced (2.0f, 1.0f);
+    if (over || down)
+    {
+        g.setColour (kind == 2 ? juce::Colour (0xffe5484d).withAlpha (down ? 0.8f : 1.0f) : L::hdrDim.withAlpha (0.25f));
+        g.fillRoundedRectangle (r, 5.0f);
+    }
+    g.setColour ((kind == 2 && over) ? juce::Colours::white : (over ? L::hdrText : L::hdrDim));
+    const auto c = r.getCentre();
+    const float s = 5.0f;
+    if (kind == 0)       g.drawLine (c.x - s, c.y + 3.0f, c.x + s, c.y + 3.0f, 1.5f);
+    else if (kind == 1)  g.drawRoundedRectangle (c.x - s, c.y - s + 0.5f, s * 2.0f, s * 2.0f - 1.0f, 1.5f, 1.4f);
+    else
+    {
+        g.drawLine (c.x - s + 0.5f, c.y - s + 0.5f, c.x + s - 0.5f, c.y + s - 0.5f, 1.5f);
+        g.drawLine (c.x - s + 0.5f, c.y + s - 0.5f, c.x + s - 0.5f, c.y - s + 0.5f, 1.5f);
+    }
+}
+
+//==============================================================================
 Pedal::Pedal (juce::AudioProcessorValueTreeState& s, const juce::String& t, juce::Colour acc,
               int onParam, int typeParam, std::initializer_list<Id> knobIds, const juce::String& sub)
     : state (s), title (t), subtitle (sub), accent (acc), onId (onParam), typeId (typeParam)
@@ -1042,10 +1121,10 @@ Pedal::Pedal (juce::AudioProcessorValueTreeState& s, const juce::String& t, juce
 
 void Pedal::applyColours()
 {
-    const bool pop = L::theme == 0;
-    const bool filled = pop && isOn;
+    const bool filled = L::style == 0 && isOn;
     const auto txt = filled ? L::onAccent (accent) : L::text;
-    const auto lab = pop ? (filled ? L::onAccent (accent).withAlpha (0.85f) : accent) : L::dim;
+    const auto lab = L::style == 0 ? (filled ? L::onAccent (accent).withAlpha (0.85f) : accent)
+                                   : (L::style == 1 ? L::dim : accent.withAlpha (0.9f));
     for (auto& k : knobs)
     {
         k->slider.setColour (juce::Slider::rotarySliderFillColourId, accent);
@@ -1123,31 +1202,64 @@ void Pedal::paint (juce::Graphics& g)
 {
     const auto r = getLocalBounds().toFloat().reduced (1.0f);
     const float a = onAmt;
-    const bool pop = L::theme == 0;
-    const float corner = pop ? 16.0f : 9.0f;
+    const int style = L::style;
+    const float corner = L::corner;
     juce::Colour textCol;
 
-    if (pop)   // filled with the pedal colour when on, outline only when off
+    switch (style)
     {
-        g.setColour (L::panel.interpolatedWith (accent, a));
-        g.fillRoundedRectangle (r, corner);
-        g.setColour (accent);
-        g.drawRoundedRectangle (r, corner, hover ? 3.0f : 2.0f);
-        textCol = accent.interpolatedWith (L::onAccent (accent), a);
-    }
-    else       // cream faceplate with an enamel band on top
-    {
-        g.setColour (juce::Colour (0x30000000));
-        g.fillRoundedRectangle (r.translated (0.0f, 2.5f), corner);
-        g.setColour (L::panel);
-        g.fillRoundedRectangle (r, corner);
-        juce::Path top;
-        top.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), 9.0f, corner, corner, true, true, false, false);
-        g.setColour (accent.interpolatedWith (juce::Colour (0xff9a937f), 1.0f - a));
-        g.fillPath (top);
-        g.setColour (L::line);
-        g.drawRoundedRectangle (r, corner, hover ? 1.8f : 1.0f);
-        textCol = L::text.interpolatedWith (L::dim, 1.0f - a);
+        case 0:   // filled with the pedal colour when on, outline only when off
+            g.setColour (L::panel.interpolatedWith (accent, a));
+            g.fillRoundedRectangle (r, corner);
+            g.setColour (accent);
+            g.drawRoundedRectangle (r, corner, hover ? 3.0f : 2.0f);
+            textCol = accent.interpolatedWith (L::onAccent (accent), a);
+            break;
+
+        case 1:   // cream faceplate with an enamel band on top
+        {
+            g.setColour (juce::Colour (0x30000000));
+            g.fillRoundedRectangle (r.translated (0.0f, 2.5f), corner);
+            g.setColour (L::panel);
+            g.fillRoundedRectangle (r, corner);
+            juce::Path top;
+            top.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), 9.0f, corner, corner, true, true, false, false);
+            g.setColour (accent.interpolatedWith (juce::Colour (0xff9a937f), 1.0f - a));
+            g.fillPath (top);
+            g.setColour (L::line);
+            g.drawRoundedRectangle (r, corner, hover ? 1.8f : 1.0f);
+            textCol = L::text.interpolatedWith (L::dim, 1.0f - a);
+            break;
+        }
+
+        case 2:   // flat dark panel with a coloured strip on top
+        {
+            g.setColour (L::panel);
+            g.fillRoundedRectangle (r, corner);
+            g.setColour (hover ? L::line.brighter (0.35f) : L::line);
+            g.drawRoundedRectangle (r, corner, 1.2f);
+            juce::Path top;
+            top.addRoundedRectangle (r.getX() + 0.5f, r.getY() + 0.5f, r.getWidth() - 1.0f, 4.0f, corner, corner, true, true, false, false);
+            g.setColour (accent.interpolatedWith (L::line, 1.0f - a));
+            g.fillPath (top);
+            textCol = L::text.interpolatedWith (L::dim, 1.0f - a);
+            break;
+        }
+
+        default:  // neon outline that glows when the pedal is on
+        {
+            g.setColour (L::panel);
+            g.fillRoundedRectangle (r, corner);
+            for (int i = 1; i <= 3; ++i)
+            {
+                g.setColour (accent.withAlpha (a * 0.075f * (float) (4 - i)));
+                g.drawRoundedRectangle (r.reduced (1.0f + (float) i * 1.7f), juce::jmax (2.0f, corner - (float) i), 1.8f);
+            }
+            g.setColour (accent.interpolatedWith (L::line, 1.0f - a));
+            g.drawRoundedRectangle (r, corner, hover ? 2.4f : 1.7f);
+            textCol = accent.interpolatedWith (L::dim, 1.0f - a);
+            break;
+        }
     }
 
     if (flash > 0.0f)
@@ -1156,34 +1268,39 @@ void Pedal::paint (juce::Graphics& g)
         g.drawRoundedRectangle (r.expanded ((1.0f - flash) * 7.0f), corner + 2.0f, 2.0f);
     }
 
-    const int ty = pop ? 6 : 12;
+    const int ty = style == 1 ? 12 : 7;
     const int textX = onId >= 0 ? 38 : 16;
+    const int rightPad = presetBtn.isVisible() ? 66 : 28;
     g.setColour (textCol);
-    g.setFont (juce::FontOptions (pop ? 14.0f : 15.0f, juce::Font::bold));
-    g.drawText (title.toUpperCase(), textX, ty, getWidth() - textX - 28, 19, juce::Justification::centredLeft);
+    g.setFont (juce::FontOptions (style == 1 ? 15.0f : 14.0f, juce::Font::bold));
+    g.drawText (title.toUpperCase(), textX, ty, getWidth() - textX - rightPad, 19, juce::Justification::centredLeft);
     if (subtitle.isNotEmpty())
     {
         g.setColour (textCol.withAlpha (0.75f));
         g.setFont (juce::FontOptions (9.5f));
-        g.drawText (subtitle, textX, ty + 18, getWidth() - textX - 28, 12, juce::Justification::centredLeft);
+        g.drawText (subtitle, textX, ty + 18, getWidth() - textX - rightPad, 12, juce::Justification::centredLeft);
     }
 
     if (onId >= 0)   // LED
     {
         const float pulse = 0.78f + 0.22f * std::sin (phase * 3.0f);
-        if (pop)
+        if (style != 1)
         {
-            const auto c = juce::Point<float> (21.0f, (float) kHeader * 0.5f);
-            g.setColour (ink.withAlpha (0.8f * a));
+            const auto c = juce::Point<float> (21.0f, (float) kHeader * 0.5f + (style == 0 ? 0.0f : 1.0f));
+            const auto ring = style == 0 ? accent.interpolatedWith (L::onAccent (accent), a) : accent;
+            g.setColour (style == 0 ? ink.withAlpha (0.8f * a) : L::inset);
             g.fillEllipse (c.x - 7.0f, c.y - 7.0f, 14.0f, 14.0f);
-            g.setColour (accent.withAlpha (0.8f));
+            g.setColour (ring.withAlpha (0.9f));
             g.drawEllipse (c.x - 7.0f, c.y - 7.0f, 14.0f, 14.0f, 1.3f);
             if (a > 0.05f)
             {
-                g.setColour (juce::Colours::white.withAlpha (a * pulse));
+                g.setColour ((style == 0 ? juce::Colours::white : accent).withAlpha (a * pulse));
                 g.fillEllipse (c.x - 3.6f, c.y - 3.6f, 7.2f, 7.2f);
-                g.setColour (accent.withAlpha (a * 0.35f * pulse));
-                g.fillEllipse (c.x - 11.0f, c.y - 11.0f, 22.0f, 22.0f);
+                if (style != 0)
+                {
+                    g.setColour (accent.withAlpha (a * 0.30f * pulse));
+                    g.fillEllipse (c.x - 11.0f, c.y - 11.0f, 22.0f, 22.0f);
+                }
             }
         }
         else   // jewel lamp
@@ -1214,15 +1331,25 @@ void Pedal::paint (juce::Graphics& g)
     // activity line along the bottom
     if (a > 0.05f)
     {
-        g.setColour ((pop ? L::onAccent (accent) : accent).withAlpha (a * (0.10f + 0.65f * sig)));
+        g.setColour ((style == 0 ? L::onAccent (accent) : accent).withAlpha (a * (0.10f + 0.65f * sig)));
         g.fillRoundedRectangle (r.getX() + 14.0f, r.getBottom() - 5.0f, r.getWidth() - 28.0f, 2.0f, 1.0f);
     }
+}
+
+void Pedal::enablePresetButton (std::function<void()> cb)
+{
+    presetBtn.setButtonText ("..");
+    presetBtn.setTooltip ("Pedal presets");
+    presetBtn.onClick = std::move (cb);
+    addAndMakeVisible (presetBtn);
+    resized();
 }
 
 void Pedal::resized()
 {
     auto a = getLocalBounds();
     led.setBounds (6, 6, 30, kHeader - 12);
+    presetBtn.setBounds (getWidth() - 56, 10, 28, 20);
     a.removeFromTop (kHeader + 6);
 
     if (typeId >= 0)
@@ -1558,21 +1685,66 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     addAndMakeVisible (*strip);
 
     // Header
-    for (const auto& pr : factoryPresets())
-        presetBox.addItem (pr.name, presetBox.getNumItems() + 1);
     presetBox.setTextWhenNothingSelected ("Chains / Presets");
-    presetBox.onChange = [this] { proc.loadPreset (presetBox.getSelectedItemIndex()); };
+    presetBox.onChange = [this]
+    {
+        const int id = presetBox.getSelectedId();
+        if (id >= 1000)
+        {
+            const int i = id - 1000;
+            if (i < userFiles.size() && ! proc.loadChainPreset (userFiles[i])) toast ("Could not read that preset");
+        }
+        else if (id >= 1)
+        {
+            proc.currentUserPreset.clear();
+            proc.loadPreset (id - 1);
+        }
+    };
     addAndMakeVisible (presetBox);
+    rebuildPresetBox();
 
     auto step = [this] (int d)
     {
-        const int n = presetBox.getNumItems();
+        const int n = (int) presetIds.size();
         if (n == 0) return;
-        const int cur = presetBox.getSelectedItemIndex();
-        presetBox.setSelectedItemIndex (((cur < 0 ? (d > 0 ? -1 : 0) : cur) + d + n) % n, juce::sendNotificationSync);
+        int cur = -1;
+        const int sel = presetBox.getSelectedId();
+        for (int i = 0; i < n; ++i) if (presetIds[(size_t) i] == sel) cur = i;
+        const int next = ((cur < 0 ? (d > 0 ? -1 : 0) : cur) + d + n) % n;
+        presetBox.setSelectedId (presetIds[(size_t) next], juce::sendNotificationSync);
     };
     prevPreset.onClick = [step] { step (-1); };
     nextPreset.onClick = [step] { step (1); };
+    saveBtn.setTooltip ("Save the whole chain as your own preset");
+    saveBtn.onClick = [this] { saveChainDialog (false); };
+    menuBtn.setTooltip ("Preset menu: save as, delete, open file, folders");
+    menuBtn.onClick = [this] { showPresetMenu(); };
+    for (auto* b : { &saveBtn, &menuBtn }) addAndMakeVisible (b);
+
+    if (proc.standalone != nullptr)
+    {
+        for (auto* b : { &winMin, &winMax, &winClose }) addAndMakeVisible (b);
+        winMin.onClick   = [this] { if (proc.standalone) proc.standalone->minimise(); };
+        winMax.onClick   = [this] { if (proc.standalone) proc.standalone->toggleMaximise(); };
+        winClose.onClick = [this] { if (proc.standalone) proc.standalone->close(); };
+        addAndMakeVisible (audioBtn);
+        audioBtn.setTooltip ("Sound card / ASIO driver, sample rate, buffer size, input mute");
+        audioBtn.onClick = [this]
+        {
+            if (proc.standalone == nullptr) return;
+            juce::PopupMenu m;
+            m.addSectionHeader ("Audio");
+            m.addItem (1, "Audio / MIDI settings...  (sound card, ASIO, buffer)");
+            m.addItem (2, "Mute guitar input  (use if you hear feedback)", true, proc.standalone->isMuted && proc.standalone->isMuted());
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&audioBtn), [this] (int r)
+            {
+                if (proc.standalone == nullptr) return;
+                if (r == 1) proc.standalone->audioSettings();
+                else if (r == 2) proc.standalone->toggleMute();
+            });
+        };
+    }
+
     allOn.onClick  = [this] { setAllEffects (true); };
     allOff.onClick = [this] { setAllEffects (false); };
     resetOrder.setButtonText ("ORDER");
@@ -1580,6 +1752,9 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     resetOrder.onClick = [this] { proc.setChainOrder (NoirProcessor::defaultOrder()); syncOrderFromProcessor(); };
     for (auto* b : { &prevPreset, &nextPreset, &allOn, &allOff, &resetOrder })
         addAndMakeVisible (b);
+
+    for (int sl = 0; sl < NumSlots; ++sl)
+        bySlot[sl]->enablePresetButton ([this, sl] { showPedalPresetMenu (sl); });
 
     power.getProperties().set ("power", true);
     power.setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -1598,17 +1773,7 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
     subCtl.onClick   = [this] { currentSub = 0; setTab (1); };
     subMacro.onClick = [this] { currentSub = 1; setTab (1); };
     themeBtn.setTooltip ("Interface theme");
-    themeBtn.onClick = [this]
-    {
-        juce::PopupMenu m;
-        m.addSectionHeader ("Theme");
-        m.addItem (1, "Pop Stompbox  (default)", true, L::theme == 0);
-        m.addItem (2, "Retro Amp", true, L::theme == 1);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&themeBtn), [this] (int r)
-        {
-            if (r > 0) setTheme (r - 1);
-        });
-    };
+    themeBtn.onClick = [this] { showThemeMenu(); };
     cancelLearn.onClick = [this] { proc.cancelMidiLearn(); };
     addChildComponent (cancelLearn);
     addAndMakeVisible (meterIn);
@@ -1624,9 +1789,9 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
         strip->setOrder (o);
     }
 
-    if (const int cp = proc.currentPreset.load(); cp >= 0) presetBox.setSelectedItemIndex (cp, juce::dontSendNotification);
+    syncPresetSelection();
 
-    setResizable (true, true);
+    setResizable (true, proc.standalone == nullptr);
     setResizeLimits (1280, 620, 7680, 4320);
     setSize (1500, 900);
     startTimerHz (30);
@@ -1667,6 +1832,224 @@ void NoirEditor::chooseIR()
                                   proc.loadIR (f);
                               timerCallback();
                           });
+}
+
+void NoirEditor::toast (const juce::String& msg)
+{
+    toastText = msg;
+    toastTime = 3.0f;
+    repaint (perfArea);
+}
+
+void NoirEditor::showThemeMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Theme");
+    for (int i = 0; i < L::NumThemes; ++i)
+        m.addItem (i + 1, L::themeName (i), true, L::theme == i);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&themeBtn), [this] (int r)
+    {
+        if (r > 0) setTheme (r - 1);
+    });
+}
+
+void NoirEditor::rebuildPresetBox()
+{
+    presetBox.clear (juce::dontSendNotification);
+    presetIds.clear();
+    userFiles = NoirProcessor::listFiles (NoirProcessor::chainPresetDir(), "*.noirpreset");
+
+    presetBox.addSectionHeading ("Factory chains");
+    const auto& fp = factoryPresets();
+    for (size_t i = 0; i < fp.size(); ++i)
+    {
+        presetBox.addItem (fp[i].name, (int) i + 1);
+        presetIds.push_back ((int) i + 1);
+    }
+    if (! userFiles.isEmpty())
+    {
+        presetBox.addSectionHeading ("My presets");
+        for (int i = 0; i < userFiles.size(); ++i)
+        {
+            presetBox.addItem (userFiles[i].getFileNameWithoutExtension(), 1000 + i);
+            presetIds.push_back (1000 + i);
+        }
+    }
+    lastListVersion = proc.presetListVersion.load();
+    syncPresetSelection();
+}
+
+void NoirEditor::syncPresetSelection()
+{
+    int want = 0;
+    const int cp = proc.currentPreset.load();
+    if (cp < 0 && proc.currentUserPreset.isNotEmpty())
+    {
+        for (int i = 0; i < userFiles.size(); ++i)
+            if (userFiles[i].getFileNameWithoutExtension() == juce::File::createLegalFileName (proc.currentUserPreset)
+                || userFiles[i].getFileNameWithoutExtension() == proc.currentUserPreset)
+                want = 1000 + i;
+    }
+    else if (cp >= 0)
+        want = cp + 1;
+
+    if (want != presetBox.getSelectedId())
+        presetBox.setSelectedId (want, juce::dontSendNotification);
+}
+
+void NoirEditor::askName (const juce::String& title, const juce::String& message, const juce::String& initial,
+                          std::function<void (juce::String)> done)
+{
+    auto* w = new juce::AlertWindow (title, message, juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", initial);
+    w->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([w, done] (int r)
+    {
+        if (r == 1) done (w->getTextEditorContents ("name"));
+    }), true);
+}
+
+void NoirEditor::saveChainDialog (bool forceNew)
+{
+    if (! forceNew && proc.currentUserPreset.isNotEmpty())    // quick save: overwrite the preset that is loaded
+    {
+        const auto n = proc.currentUserPreset;
+        toast (proc.saveChainPreset (n) ? "Saved preset \"" + n + "\"" : "Could not save the preset");
+        return;
+    }
+
+    juce::Component::SafePointer<NoirEditor> safe (this);
+    askName ("Save preset", "Name for your preset. It stores every pedal, all knobs, the pedal order and the cabinet IR.",
+             proc.currentUserPreset, [safe] (juce::String name)
+    {
+        if (safe == nullptr) return;
+        safe->toast (safe->proc.saveChainPreset (name) ? "Saved preset \"" + name.trim() + "\"" : "Could not save the preset");
+    });
+}
+
+void NoirEditor::showPresetMenu()
+{
+    userFiles = NoirProcessor::listFiles (NoirProcessor::chainPresetDir(), "*.noirpreset");
+    juce::PopupMenu m, del;
+    m.addSectionHeader ("My presets");
+    m.addItem (1, "Save as new preset...");
+    if (proc.currentUserPreset.isNotEmpty()) m.addItem (2, "Save over \"" + proc.currentUserPreset + "\"");
+    for (int i = 0; i < userFiles.size(); ++i) del.addItem (400 + i, userFiles[i].getFileNameWithoutExtension());
+    m.addSubMenu ("Delete preset", del, ! userFiles.isEmpty());
+    m.addSeparator();
+    m.addItem (5, "Open a preset file...");
+    m.addItem (6, "Show my presets folder");
+    m.addItem (7, "Show my impulse responses folder");
+
+    juce::Component::SafePointer<NoirEditor> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn), [safe] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        auto& ed = *safe;
+        if (r == 1) ed.saveChainDialog (true);
+        else if (r == 2) ed.saveChainDialog (false);
+        else if (r == 5)
+        {
+            ed.chooser = std::make_unique<juce::FileChooser> ("Open a Noir preset", NoirProcessor::chainPresetDir().exists() ? NoirProcessor::chainPresetDir()
+                                                              : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.noirpreset");
+            ed.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr) return;
+                const auto f = fc.getResult();
+                if (f.existsAsFile())
+                    safe->toast (safe->proc.loadChainPreset (f) ? "Loaded " + f.getFileNameWithoutExtension() : "Could not read that preset");
+            });
+        }
+        else if (r == 6) { NoirProcessor::chainPresetDir().createDirectory(); NoirProcessor::chainPresetDir().revealToUser(); }
+        else if (r == 7) { NoirProcessor::irLibraryDir().createDirectory(); NoirProcessor::irLibraryDir().revealToUser(); }
+        else if (r >= 400 && r < 1000)
+        {
+            const int i = r - 400;
+            if (i >= ed.userFiles.size()) return;
+            const auto file = ed.userFiles[i];
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
+                                              .withTitle ("Delete preset")
+                                              .withMessage ("Delete \"" + file.getFileNameWithoutExtension() + "\"? This removes the file.")
+                                              .withButton ("Delete").withButton ("Cancel"),
+                                          [safe, file] (int res)
+            {
+                if (res != 1 || safe == nullptr) return;
+                if (file.deleteFile())
+                {
+                    if (safe->proc.currentUserPreset == file.getFileNameWithoutExtension()) safe->proc.currentUserPreset.clear();
+                    safe->proc.presetListVersion.fetch_add (1);
+                    safe->toast ("Deleted " + file.getFileNameWithoutExtension());
+                }
+            });
+        }
+    });
+}
+
+void NoirEditor::showPedalPresetMenu (int slot)
+{
+    const auto dir = NoirProcessor::pedalPresetDir (slot);
+    const auto files = NoirProcessor::listFiles (dir, "*.noirpedal");
+    const auto irs = slot == SCab ? NoirProcessor::listFiles (NoirProcessor::irLibraryDir(), "*.wav;*.aif;*.aiff;*.flac") : juce::Array<juce::File>();
+    const juce::String pedalName = kSlotShort[slot];
+
+    juce::PopupMenu m, del;
+    m.addSectionHeader (pedalName + " presets");
+    m.addItem (1, "Save this pedal as a preset...");
+    for (int i = 0; i < files.size(); ++i)
+    {
+        m.addItem (100 + i, files[i].getFileNameWithoutExtension());
+        del.addItem (300 + i, files[i].getFileNameWithoutExtension());
+    }
+    if (! files.isEmpty()) m.addSubMenu ("Delete preset", del);
+
+    if (slot == SCab)
+    {
+        m.addSeparator();
+        m.addSectionHeader ("Impulse responses");
+        m.addItem (2, "Load IR file...");
+        if (proc.hasIR()) m.addItem (3, "Remove IR  (use built-in cabinet)");
+        for (int i = 0; i < irs.size(); ++i)
+            m.addItem (500 + i, irs[i].getFileNameWithoutExtension(), true, proc.hasIR() && proc.getIRName() == irs[i].getFileNameWithoutExtension());
+    }
+
+    m.addSeparator();
+    m.addItem (4, "Reset pedal to defaults");
+    m.addItem (5, "Show presets folder");
+
+    juce::Component::SafePointer<NoirEditor> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options(), [safe, slot, files, irs, dir, pedalName] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        auto& ed = *safe;
+        if (r == 1)
+        {
+            ed.askName ("Save " + pedalName + " preset", "Name for this pedal preset. It stores the pedal's knobs and type"
+                                                          + juce::String (slot == SCab ? " and the loaded IR." : "."), {},
+                        [safe, slot, pedalName] (juce::String name)
+                        {
+                            if (safe == nullptr) return;
+                            safe->toast (safe->proc.savePedalPreset (slot, name) ? "Saved " + pedalName + " preset \"" + name.trim() + "\""
+                                                                                  : "Could not save the preset");
+                        });
+        }
+        else if (r == 2) ed.chooseIR();
+        else if (r == 3) ed.proc.clearIR();
+        else if (r == 4) ed.proc.resetPedal (slot);
+        else if (r == 5) { dir.createDirectory(); dir.revealToUser(); }
+        else if (r >= 100 && r < 300 && r - 100 < files.size())
+            ed.toast (ed.proc.loadPedalPreset (slot, files[r - 100]) ? "Loaded " + files[r - 100].getFileNameWithoutExtension() : "Could not read that preset");
+        else if (r >= 300 && r < 500 && r - 300 < files.size())
+        {
+            const auto f = files[r - 300];
+            if (f.deleteFile()) ed.toast ("Deleted " + f.getFileNameWithoutExtension());
+        }
+        else if (r >= 500 && r - 500 < irs.size())
+        {
+            ed.proc.loadIR (irs[r - 500]);
+            ed.toast ("IR: " + irs[r - 500].getFileNameWithoutExtension());
+        }
+    });
 }
 
 void NoirEditor::buildPanels()
@@ -1797,6 +2180,7 @@ void NoirEditor::timerCallback()
     {
         cancelLearn.setVisible (learning);
         presetBox.setVisible (! learning); prevPreset.setVisible (! learning); nextPreset.setVisible (! learning);
+        saveBtn.setVisible (! learning); menuBtn.setVisible (! learning);
         repaint (headerArea);
     }
 
@@ -1806,11 +2190,12 @@ void NoirEditor::timerCallback()
         for (auto& p : pedals) p->refresh();
     }
 
-    if (const int cp = proc.currentPreset.load(); cp >= 0 && cp != presetBox.getSelectedItemIndex())
-        presetBox.setSelectedItemIndex (cp, juce::dontSendNotification);
+    if (lastListVersion != proc.presetListVersion.load()) rebuildPresetBox();
+    else syncPresetSelection();
 
     const int cpu = juce::roundToInt (proc.cpuLoad.load() * 100.0f);
-    const auto txt = "CPU " + juce::String (cpu) + "%    glitches " + juce::String (proc.xruns.load())
+    const auto txt = toastTime > 0.0f ? toastText
+                   : "CPU " + juce::String (cpu) + "%    glitches " + juce::String (proc.xruns.load())
                      + "    plugin latency " + juce::String (proc.getLatencySamples()) + " smp";
     if (txt != perfText) { perfText = txt; repaint (perfArea); }
 }
@@ -1828,7 +2213,9 @@ void NoirEditor::animTick()
 
     outSmooth += (juce::jmin (1.0f, op * 5.0f) - outSmooth) * juce::jmin (1.0f, dt * 12.0f);
     wavePhase = std::fmod (wavePhase + dt * (1.5f + outSmooth * 6.0f), 6.2832f);
-    repaint (waveArea);
+    if (toastTime > 0.0f && (toastTime -= dt) <= 0.0f) { toastTime = 0.0f; repaint (perfArea); }
+    if (L::theme == 3 || L::theme == 5) repaint (0, 0, getWidth(), headerArea.getBottom() + 14);   // animated header
+    else repaint (waveArea);
 
     if (currentTab == 0)
     {
@@ -1844,26 +2231,86 @@ void NoirEditor::paint (juce::Graphics& g)
 {
     g.fillAll (L::bg);
     const bool retro = L::theme == 1;
+    const int hb = headerArea.getBottom() + 8;     // bottom edge of the header band
+    const float W = (float) getWidth();
+    const float tphase = wavePhase / 6.2832f;       // 0..1, loops
 
-    if (retro)   // dark control-panel bar with a brass trim line
+    switch (L::theme)
     {
-        const int h = headerArea.getBottom() + 8;
-        g.setColour (juce::Colour (0xff1f1c17));
-        g.fillRect (0, 0, getWidth(), h);
-        g.setColour (L::gold.withAlpha (0.6f));
-        g.fillRect (0, h - 2, getWidth(), 2);
-        g.setColour (juce::Colour (0x28000000));
-        g.fillRect (0, h, getWidth(), 3);
-    }
-    else
-    {
-        juce::ColourGradient vignette (juce::Colour (0xff1d1d1d), (float) getWidth() * 0.5f, 0.0f,
-                                       L::bg, (float) getWidth() * 0.5f, 200.0f, false);
-        g.setGradientFill (vignette);
-        g.fillRect (0, 0, getWidth(), 200);
+        case 0:
+        {
+            juce::ColourGradient vignette (juce::Colour (0xff1d1d1d), W * 0.5f, 0.0f, L::bg, W * 0.5f, 200.0f, false);
+            g.setGradientFill (vignette);
+            g.fillRect (0, 0, getWidth(), 200);
+            break;
+        }
+        case 1:   // dark control-panel bar with a brass trim line
+            g.setColour (juce::Colour (0xff1f1c17));
+            g.fillRect (0, 0, getWidth(), hb);
+            g.setColour (L::gold.withAlpha (0.6f));
+            g.fillRect (0, hb - 2, getWidth(), 2);
+            g.setColour (juce::Colour (0x28000000));
+            g.fillRect (0, hb, getWidth(), 3);
+            break;
+        case 2:   // flat studio bar
+            g.setColour (juce::Colour (0xff15171a));
+            g.fillRect (0, 0, getWidth(), hb);
+            g.setColour (L::line);
+            g.fillRect (0, hb - 1, getWidth(), 1);
+            g.setColour (L::accent.withAlpha (0.8f));
+            g.fillRect (0, hb - 1, 96, 1);
+            break;
+        case 3:   // neon: dark bar with a light that runs along the bottom edge
+        {
+            g.setColour (juce::Colour (0xff0a0816));
+            g.fillRect (0, 0, getWidth(), hb);
+            g.setColour (L::line);
+            g.fillRect (0, hb - 1, getWidth(), 1);
+            const float cx = W * tphase;
+            for (int k = -1; k <= 1; ++k)
+            {
+                const float x = cx + W * (float) k;
+                juce::ColourGradient glow (juce::Colour (0x0000f0ff), x - 260.0f, 0.0f, juce::Colour (0x0000f0ff), x + 40.0f, 0.0f, false);
+                glow.addColour (0.80, juce::Colour (0xff00f0ff));
+                glow.addColour (0.93, juce::Colour (0xffff2bd6));
+                g.setGradientFill (glow);
+                g.fillRect (juce::Rectangle<float> (x - 260.0f, (float) hb - 2.0f, 300.0f, 2.0f));
+                g.setGradientFill (juce::ColourGradient (juce::Colour (0x0000f0ff), 0.0f, (float) hb - 14.0f, juce::Colour (0x2800f0ff), 0.0f, (float) hb, false));
+                g.fillRect (juce::Rectangle<float> (x - 120.0f, (float) hb - 14.0f, 160.0f, 14.0f));
+            }
+            break;
+        }
+        case 4:   // Swiss: no bar, one heavy rule
+            g.setColour (L::text);
+            g.fillRect (0, hb - 3, getWidth(), 3);
+            g.setColour (L::accent);
+            g.fillRect (0, hb - 3, 120, 3);
+            break;
+        default:  // Aurora: soft drifting colour behind a glass bar
+        {
+            g.setColour (juce::Colour (0xff0f131b));
+            g.fillRect (0, 0, getWidth(), hb);
+            static const juce::uint32 cols[3] = { 0xff7cf4d4, 0xffa78bfa, 0xff5eb1ff };
+            for (int k = 0; k < 3; ++k)
+            {
+                const float ph = tphase * 6.2832f + (float) k * 2.1f;
+                const float x = W * (0.2f + 0.3f * (float) k) + std::sin (ph) * W * 0.12f;
+                juce::ColourGradient blob (juce::Colour (cols[k]).withAlpha (0.20f), x, (float) hb * 0.4f,
+                                           juce::Colour (cols[k]).withAlpha (0.0f), x + W * 0.16f, (float) hb * 1.1f, true);
+                g.setGradientFill (blob);
+                g.fillRect (0, 0, getWidth(), hb);
+            }
+            juce::ColourGradient edge (juce::Colour (0x007cf4d4), 0.0f, 0.0f, juce::Colour (0x007cf4d4), W, 0.0f, false);
+            edge.addColour (0.25 + 0.0 * tphase, juce::Colour (0xcc7cf4d4));
+            edge.addColour (0.55, juce::Colour (0xcca78bfa));
+            edge.addColour (0.80, juce::Colour (0xcc5eb1ff));
+            g.setGradientFill (edge);
+            g.fillRect (0, hb - 1, getWidth(), 1);
+            break;
+        }
     }
 
-    g.setColour (retro ? L::gold : L::text);
+    g.setColour ((retro || L::theme == 3 || L::theme == 5) ? L::gold : L::text);
     g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
     g.drawText ("NOIR", 22, 8, 80, 30, juce::Justification::centredLeft);
 
@@ -1897,6 +2344,30 @@ void NoirEditor::paint (juce::Graphics& g)
                     presetBox.getBounds().withX (prevPreset.getX()).withRight (nextPreset.getRight()).withTrimmedRight (-80),
                     juce::Justification::centredLeft);
     }
+}
+
+void NoirEditor::mouseDown (const juce::MouseEvent& e)
+{
+    if (proc.standalone != nullptr && e.getPosition().y < headerArea.getBottom() + 8 && ! e.mods.isPopupMenu())
+        if (auto* top = getTopLevelComponent())
+        {
+            const auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (top->getBounds());
+            if (d == nullptr || top->getBounds() != d->userArea)       // a maximised window stays put
+                dragger.startDraggingComponent (top, e.getEventRelativeTo (top));
+        }
+}
+
+void NoirEditor::mouseDrag (const juce::MouseEvent& e)
+{
+    if (proc.standalone != nullptr && e.getMouseDownPosition().y < headerArea.getBottom() + 8)
+        if (auto* top = getTopLevelComponent())
+            dragger.dragComponent (top, e.getEventRelativeTo (top), nullptr);
+}
+
+void NoirEditor::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (proc.standalone != nullptr && proc.standalone->toggleMaximise && e.getPosition().y < headerArea.getBottom() + 8)
+        proc.standalone->toggleMaximise();
 }
 
 void NoirEditor::layoutCards (bool animate)
@@ -1994,6 +2465,14 @@ void NoirEditor::resized()
         themeBtn.setBounds (h.removeFromLeft (68).withSizeKeepingCentre (66, 28));
         h.removeFromLeft (10);
 
+        if (proc.standalone != nullptr)
+        {
+            winClose.setBounds (getWidth() - 40, 3, 36, 24);
+            winMax.setBounds (getWidth() - 76, 3, 36, 24);
+            winMin.setBounds (getWidth() - 112, 3, 36, 24);
+            audioBtn.setBounds (getWidth() - 112 - 8 - 70, 5, 70, 20);
+        }
+
         power.setBounds (h.removeFromRight (108).withSizeKeepingCentre (108, 28));
         h.removeFromRight (6);
         resetOrder.setBounds (h.removeFromRight (58).withSizeKeepingCentre (58, 28));
@@ -2009,8 +2488,12 @@ void NoirEditor::resized()
         meterOut.setBounds (meters.withSizeKeepingCentre (meters.getWidth(), 22));
         h.removeFromRight (10);
 
-        auto mid = h.withSizeKeepingCentre (juce::jmin (h.getWidth(), 360), 28);
+        auto mid = h.withSizeKeepingCentre (juce::jmin (h.getWidth(), 440), 28);
         cancelLearn.setBounds (mid.removeFromRight (80));
+        menuBtn.setBounds (mid.removeFromRight (30));
+        mid.removeFromRight (4);
+        saveBtn.setBounds (mid.removeFromRight (52));
+        mid.removeFromRight (8);
         prevPreset.setBounds (mid.removeFromLeft (30));
         mid.removeFromLeft (6);
         nextPreset.setBounds (mid.removeFromRight (30));

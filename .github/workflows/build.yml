@@ -1,4 +1,4 @@
-name: Build Windows installer
+name: Build installers (Windows + macOS)
 
 on:
   workflow_dispatch:
@@ -63,9 +63,60 @@ jobs:
           name: NoirGuitar-Setup
           path: dist/NoirGuitar-Setup.exe
 
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (universal arm64 + x86_64)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Stage bundles
+        run: |
+          mkdir -p stage
+          vst=$(find build -type d -name "Noir Guitar.vst3" | head -n 1)
+          au=$(find build -type d -name "Noir Guitar.component" | head -n 1)
+          app=$(find build -type d -name "Noir Guitar.app" | head -n 1)
+          echo "vst3=$vst"; echo "au=$au"; echo "app=$app"
+          test -n "$vst" && test -n "$au" && test -n "$app"
+          cp -R "$vst" "$au" "$app" stage/
+          # ad-hoc signature: required for arm64 binaries to load at all
+          for b in stage/*; do codesign --force --deep -s - "$b"; done
+          lipo -archs "stage/Noir Guitar.app/Contents/MacOS/Noir Guitar"
+
+      - name: Build installer package
+        run: |
+          mkdir -p pkgroot/vst3/Library/Audio/Plug-Ins/VST3 pkgroot/au/Library/Audio/Plug-Ins/Components pkgroot/app/Applications pkgs dist
+          cp -R "stage/Noir Guitar.vst3" pkgroot/vst3/Library/Audio/Plug-Ins/VST3/
+          cp -R "stage/Noir Guitar.component" pkgroot/au/Library/Audio/Plug-Ins/Components/
+          cp -R "stage/Noir Guitar.app" pkgroot/app/Applications/
+          pkgbuild --root pkgroot/vst3 --identifier com.noiraudio.noirguitar.vst3 --version 1.0 --install-location / pkgs/vst3.pkg
+          pkgbuild --root pkgroot/au   --identifier com.noiraudio.noirguitar.au   --version 1.0 --install-location / pkgs/au.pkg
+          pkgbuild --root pkgroot/app  --identifier com.noiraudio.noirguitar.app  --version 1.0 --install-location / pkgs/app.pkg
+          productbuild --distribution installer/mac/distribution.xml --package-path pkgs dist/NoirGuitar-macOS.pkg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NoirGuitar-macOS
+          path: dist/NoirGuitar-macOS.pkg
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Noir Guitar v1.0.${{ github.run_number }}
-          files: dist/NoirGuitar-Setup.exe
+          files: |
+            dist/NoirGuitar-Setup.exe
+            dist/NoirGuitar-macOS.pkg

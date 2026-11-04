@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
+# macOS: one universal binary (Apple Silicon + Intel) that runs on macOS 10.13 and newer. Must be set before project().
+if(APPLE)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "")
+endif()
+
 project(NoirGuitar VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -12,17 +18,26 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW ON)
 FetchContent_MakeAvailable(JUCE)
 
+# Plug-in formats: VST3 + Standalone everywhere, plus Audio Unit on macOS (Logic, GarageBand, MainStage).
+set(NOIR_FORMATS VST3 Standalone)
+if(APPLE)
+    list(APPEND NOIR_FORMATS AU)
+endif()
+
 juce_add_plugin(NoirGuitar
     COMPANY_NAME "Noir Audio"
     PLUGIN_MANUFACTURER_CODE Noir
     PLUGIN_CODE Ngtr
-    FORMATS VST3 Standalone
+    FORMATS ${NOIR_FORMATS}
     PRODUCT_NAME "Noir Guitar"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     VST3_CATEGORIES Fx Distortion
     COPY_PLUGIN_AFTER_BUILD FALSE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Noir Guitar needs the audio input to process your guitar."
+    AU_MAIN_TYPE kAudioUnitType_Effect
     # Standalone: let the user pick any ASIO / WASAPI / DirectSound device, and open the settings button.
     STANDALONE_FOR_GUITAR TRUE)
 
@@ -41,7 +56,11 @@ target_compile_definitions(NoirGuitar PUBLIC
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     JUCE_WASAPI=1
     JUCE_DIRECTSOUND=1
-    JUCE_USE_WINRT_MIDI=0)
+    JUCE_USE_WINRT_MIDI=0
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
+
+# Own standalone application (frameless window, input live by default)
+target_sources(NoirGuitar_Standalone PRIVATE Source/StandaloneApp.cpp)
 
 # ASIO: needs Steinberg's ASIO SDK (not bundled). The CI downloads it and passes -DASIO_SDK_DIR=...
 set(ASIO_SDK_DIR "" CACHE PATH "Path to the unpacked Steinberg ASIO SDK")

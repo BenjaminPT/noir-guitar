@@ -19,6 +19,15 @@ public:
                                dim { 0xff9a968d }, accent { 0xffff9f6b }, inset { 0xff141414 }, insetLine { 0xff2c2c2c },
                                hdrText { 0xfff4f1ea }, hdrDim { 0xff9a968d }, gold { 0xffff9f6b };
     static inline int theme = 0;
+    static inline int style = 0;        // pedal surface: 0 filled, 1 enamel band, 2 flat panel, 3 neon outline
+    static inline int knobStyle = 0;    // 0 stomp, 1 brass, 2 arc
+    static inline float corner = 16.0f;
+    static constexpr int NumThemes = 6;
+    static const char* themeName (int t)
+    {
+        static const char* n[NumThemes] = { "Pop Stompbox  (default)", "Retro Amp", "Pro Studio", "Neon Night", "Swiss Mono", "Aurora" };
+        return n[t < 0 ? 0 : (t >= NumThemes ? NumThemes - 1 : t)];
+    }
     static juce::Colour onAccent (juce::Colour c) { return c.getPerceivedBrightness() > 0.6f ? juce::Colour (0xff111111) : juce::Colour (0xfff6efde); }
 
     NoirLookAndFeel();
@@ -34,6 +43,16 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::FontOptions (12.5f); }
     juce::Font getLabelFont (juce::Label&) override { return juce::FontOptions (11.0f); }
     juce::Font getTextButtonFont (juce::TextButton&, int) override { return juce::FontOptions (11.0f, juce::Font::bold); }
+};
+
+// Window button (minimise / maximise / close) drawn in the plug-in's own header when running standalone.
+class WinButton : public juce::Button
+{
+public:
+    explicit WinButton (int k) : juce::Button ("win"), kind (k) { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
+    void paintButton (juce::Graphics&, bool over, bool down) override;
+private:
+    int kind;   // 0 minimise, 1 maximise, 2 close
 };
 
 // Note / cents display for the tuner pedal.
@@ -174,6 +193,7 @@ public:
     void applyColours();
     bool noDrag = false;
     int minRowHeight = 0;
+    void enablePresetButton (std::function<void()> onClick);
 
     std::function<juce::Rectangle<int> (juce::Rectangle<int>)> onLayoutBody;
 
@@ -199,6 +219,7 @@ private:
     juce::Point<int> downPos;
 
     juce::ToggleButton led;
+    juce::TextButton presetBtn { ".." };
     juce::ComboBox type;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::pair<juce::Component*, Id>> controls;
@@ -241,6 +262,9 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
     struct Board : public juce::Component
@@ -261,6 +285,15 @@ private:
     void setTheme (int t);
     void refreshAccents();
     void buildPanels();
+    void rebuildPresetBox();
+    void syncPresetSelection();
+    void askName (const juce::String& title, const juce::String& message, const juce::String& initial,
+                  std::function<void (juce::String)> done);
+    void saveChainDialog (bool forceNew);
+    void showPresetMenu();
+    void showPedalPresetMenu (int slot);
+    void showThemeMenu();
+    void toast (const juce::String& msg);
 
     Pedal* makePedal (int slot);
 
@@ -280,6 +313,14 @@ private:
     int boardWidth = 0;
 
     juce::ComboBox presetBox;
+    juce::TextButton saveBtn { "SAVE" }, menuBtn { "..." }, audioBtn { "AUDIO" };
+    WinButton winMin { 0 }, winMax { 1 }, winClose { 2 };
+    juce::ComponentDragger dragger;
+    juce::Array<juce::File> userFiles;
+    std::vector<int> presetIds;
+    int lastListVersion = -1;
+    juce::String toastText;
+    float toastTime = 0.0f;
     juce::TextButton tabBoard { "BOARD" }, tabMidi { "MIDI" }, cancelLearn { "CANCEL" }, themeBtn { "THEME" },
                      subCtl { "CONTROLLERS" }, subMacro { "TEMPO & MACROS" };
     int currentSub = 0;
