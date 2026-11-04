@@ -2079,7 +2079,7 @@ void NoirEditor::refreshAccents()
 
 void NoirEditor::setTheme (int t)
 {
-    t = juce::jlimit (0, 1, t);
+    t = juce::jlimit (0, L::NumThemes - 1, t);
     if (t == L::theme) return;
     proc.uiTheme.store (t);
     laf.applyTheme (t);
