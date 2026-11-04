@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include <juce_dsp/juce_dsp.h>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -13,14 +14,15 @@
 class NoirLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    static inline const juce::Colour bg     { 0xff0b0b0d };
-    static inline const juce::Colour panel  { 0xff131316 };
-    static inline const juce::Colour line   { 0xff26262b };
-    static inline const juce::Colour text   { 0xffe8e6e1 };
-    static inline const juce::Colour dim    { 0xff75757d };
-    static inline const juce::Colour accent { 0xffe8a33d };
+    // Palette of the active theme (0 = Pop Stompbox, 1 = Retro Amp). Changed by applyTheme().
+    static inline juce::Colour bg { 0xff121212 }, panel { 0xff171717 }, line { 0xff2c2c2c }, text { 0xfff4f1ea },
+                               dim { 0xff9a968d }, accent { 0xffff9f6b }, inset { 0xff141414 }, insetLine { 0xff2c2c2c },
+                               hdrText { 0xfff4f1ea }, hdrDim { 0xff9a968d }, gold { 0xffff9f6b };
+    static inline int theme = 0;
+    static juce::Colour onAccent (juce::Colour c) { return c.getPerceivedBrightness() > 0.6f ? juce::Colour (0xff111111) : juce::Colour (0xfff6efde); }
 
     NoirLookAndFeel();
+    void applyTheme (int t);
 
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos,
                            float startAngle, float endAngle, juce::Slider&) override;
@@ -83,6 +85,68 @@ private:
     int selected = 0;
 };
 
+// Pro-Q style EQ: spectrum analyser, response curve and draggable band nodes (8 bands).
+class EqPanel : public juce::Component, private juce::Timer
+{
+public:
+    explicit EqPanel (NoirProcessor&);
+    ~EqPanel() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void visibilityChanged() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void refreshTheme();
+
+private:
+    static constexpr int N = 4096, Cols = 360;
+
+    void timerCallback() override;
+    void selectBand (int b);
+    int bandAt (juce::Point<float>) const;
+    float xForFreq (float f) const;
+    float freqForX (float x) const;
+    float yForGain (float g) const;
+    float gainForY (float y) const;
+    float getP (int band, int field) const;
+    void setP (int band, int field, float plain);
+    bool usesGain (int type) const { return type == noir::EqBell || type == noir::EqLowShelf || type == noir::EqHighShelf; }
+    juce::Colour bandColour (int b) const;
+    void showMenu (int band);
+    void gesture (int band, bool begin);
+    juce::Rectangle<float> chipRect (int i) const;
+    static juce::String fmtFreq (float f);
+
+    NoirProcessor& proc;
+    juce::Rectangle<int> ctl;
+    int lastType = -1;
+    float startF = 1000.0f, startG = 0.0f;
+    juce::Point<float> downPt;
+    juce::dsp::FFT fft { 12 };
+    juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
+    std::vector<float> fftBuf, spec;
+    juce::Rectangle<float> graph;
+    int selected = 0, hover = -1, dragBand = -1;
+    bool analyzerOn = true;
+    float phase = 0.0f;
+
+    juce::Label bandLabel, freqLabel, gainLabel, qLabel;
+    juce::ComboBox typeBox;
+    juce::Slider freqS, gainS, qS;
+    juce::ToggleButton onBtn, analyzerBtn;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqAtt, gainAtt, qAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EqPanel)
+};
+
 // One effect "pedal": header, LED, optional type selector and a row of knobs.
 // Click anywhere on its surface to switch it on or off; drag the header to reorder.
 class Pedal : public juce::Component
@@ -106,6 +170,10 @@ public:
     void setDesiredWidth (int w) { fixedWidth = w; }
     bool isEnabled() const { return isOn; }
     void toggle();
+    void setAccent (juce::Colour c) { accent = c; applyColours(); repaint(); }
+    void applyColours();
+    bool noDrag = false;
+    int minRowHeight = 0;
 
     std::function<juce::Rectangle<int> (juce::Rectangle<int>)> onLayoutBody;
 
@@ -147,6 +215,7 @@ public:
     ChainStrip (NoirProcessor& p, std::vector<juce::Colour> slotColours);
 
     void setOrder (const NoirProcessor::Order& o) { order = o; repaint(); }
+    void setColours (std::vector<juce::Colour> c) { colours = std::move (c); repaint(); }
     void tick (float dt, float signal) { phase = std::fmod (phase + dt * (0.35f + 1.2f * signal), 1.0f); repaint(); }
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -189,6 +258,9 @@ private:
     void commitOrder();
     void showParamMenu (Id id);
     void setTab (int tab);
+    void setTheme (int t);
+    void refreshAccents();
+    void buildPanels();
 
     Pedal* makePedal (int slot);
 
@@ -200,14 +272,17 @@ private:
     Board board;
     std::vector<std::unique_ptr<Pedal>> pedals;
     Pedal* bySlot[NumSlots] {};
-    Pedal *pTuner = nullptr, *pOut = nullptr;
+    Pedal *pTuner = nullptr, *pOut = nullptr, *pEq = nullptr;
+    std::unique_ptr<EqPanel> eqPanel;
     std::vector<Pedal*> cards;
     Pedal* dragging = nullptr;
     juce::Point<int> grabOffset;
     int boardWidth = 0;
 
     juce::ComboBox presetBox;
-    juce::TextButton tabBoard { "BOARD" }, tabMidi { "MIDI" }, tabDaw { "DAW" }, cancelLearn { "CANCEL" };
+    juce::TextButton tabBoard { "BOARD" }, tabMidi { "MIDI" }, cancelLearn { "CANCEL" }, themeBtn { "THEME" },
+                     subCtl { "CONTROLLERS" }, subMacro { "TEMPO & MACROS" };
+    int currentSub = 0;
     std::unique_ptr<DawPanel> daw;
     std::unique_ptr<MidiPanel> midi;
     int currentTab = 0;

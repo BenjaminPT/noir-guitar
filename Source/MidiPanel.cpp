@@ -52,7 +52,7 @@ MidiPanel::MidiPanel (NoirProcessor& p) : proc (p)
 
     deviceList.setModel (deviceModel.get());
     deviceList.setRowHeight (30);
-    deviceList.setColour (juce::ListBox::backgroundColourId, juce::Colour (0xff0f0f12));
+    deviceList.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
     deviceList.setColour (juce::ListBox::outlineColourId, L::line);
     deviceList.setOutlineThickness (1);
     addAndMakeVisible (deviceList);
@@ -133,7 +133,7 @@ MidiPanel::MidiPanel (NoirProcessor& p) : proc (p)
 
     bindingList.setModel (bindingModel.get());
     bindingList.setRowHeight (28);
-    bindingList.setColour (juce::ListBox::backgroundColourId, juce::Colour (0xff0f0f12));
+    bindingList.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
     bindingList.setColour (juce::ListBox::outlineColourId, L::line);
     bindingList.setOutlineThickness (1);
     addAndMakeVisible (bindingList);

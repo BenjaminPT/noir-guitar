@@ -737,4 +737,30 @@ private:
     std::atomic<int> wi { 0 };
     std::vector<float> ring;
 };
+//==============================================================================
+// Lock-free tap for spectrum displays: the audio thread pushes samples, the message thread copies the latest block.
+class SpectrumTap
+{
+public:
+    static constexpr int Size = 16384;
+    SpectrumTap() : ring ((size_t) Size, 0.0f) {}
+
+    inline void push (float x) noexcept
+    {
+        const int i = wi.load (std::memory_order_relaxed);
+        ring[(size_t) (i & (Size - 1))] = x;
+        wi.store (i + 1, std::memory_order_release);
+    }
+
+    void copyLatest (float* dst, int n) const
+    {
+        const int end = wi.load (std::memory_order_acquire);
+        for (int k = 0; k < n; ++k)
+            dst[k] = ring[(size_t) ((end - n + k) & (Size - 1))];
+    }
+
+private:
+    std::vector<float> ring;
+    std::atomic<int> wi { 0 };
+};
 } // namespace noir

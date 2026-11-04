@@ -17,7 +17,11 @@ enum Id
     DrvOn, DrvType, DrvDrive, DrvTone, DrvLevel,
     AmpOn, AmpGain, AmpBass, AmpMid, AmpTreble, AmpPres,
     CabOn, CabType,
-    EqOn, EqLow, EqLowMid, EqHiMid, EqHigh,
+    EqOn,
+    Eb1On, Eb1Type, Eb1Freq, Eb1Gain, Eb1Q,  Eb2On, Eb2Type, Eb2Freq, Eb2Gain, Eb2Q,
+    Eb3On, Eb3Type, Eb3Freq, Eb3Gain, Eb3Q,  Eb4On, Eb4Type, Eb4Freq, Eb4Gain, Eb4Q,
+    Eb5On, Eb5Type, Eb5Freq, Eb5Gain, Eb5Q,  Eb6On, Eb6Type, Eb6Freq, Eb6Gain, Eb6Q,
+    Eb7On, Eb7Type, Eb7Freq, Eb7Gain, Eb7Q,  Eb8On, Eb8Type, Eb8Freq, Eb8Gain, Eb8Q,
     M1On, M1Type, M1Rate, M1Depth, M1Mix,
     M2On, M2Type, M2Rate, M2Depth, M2Mix,
     LoOn, LoBits, LoRate, LoMix,
@@ -35,6 +39,11 @@ enum Id
     NumParams
 };
 
+// 8-band parametric EQ: parameters of band b (0..7) are Eb1On + b * kEqStride + field
+inline constexpr int kEqBands = 8, kEqStride = 5;
+enum EqField { EqfOn, EqfType, EqfFreq, EqfGain, EqfQ };
+inline constexpr Id eqParam (int band, int field) { return (Id) ((int) Eb1On + band * kEqStride + field); }
+
 struct ParamInfo
 {
     const char* id;
@@ -49,6 +58,13 @@ struct ParamInfo
 #define PF(id, name, lo, hi, def, fmt) { id, name, 0, lo, hi, def, nullptr, fmt, 1.0f }
 #define PB(id, name, def)              { id, name, 1, 0.0f, 1.0f, def, nullptr, Num, 1.0f }
 #define PC(id, name, choices, def)     { id, name, 2, 0.0f, 0.0f, def, choices, Num, 1.0f }
+#define EQTYPES "Bell|Low Shelf|High Shelf|Low Cut|High Cut|Notch|Band Pass"
+#define EQB(n, type, freq) \
+    PB ("eq" #n "_on", "Band " #n " On", 0.0f), \
+    PC ("eq" #n "_type", "Band " #n " Type", EQTYPES, (float) (type)), \
+    { "eq" #n "_freq", "Band " #n " Freq", 0, 20.0f, 20000.0f, (freq), nullptr, Hz, 0.2f }, \
+    PF ("eq" #n "_gain", "Band " #n " Gain", -18.0f, 18.0f, 0.0f, Db), \
+    { "eq" #n "_q", "Band " #n " Q", 0, 0.1f, 18.0f, 1.0f, nullptr, Num, 0.23f }
 
 inline const ParamInfo kParams[NumParams] = {
     PB ("power", "Power", 1.0f),
@@ -95,10 +111,8 @@ inline const ParamInfo kParams[NumParams] = {
     PC ("cab_type", "Cab", "1x12 Open|2x12 Combo|4x12 Closed", 1.0f),
 
     PB ("eq_on", "EQ On", 0.0f),
-    PF ("eq_low", "Low", -12.0f, 12.0f, 0.0f, Db),
-    PF ("eq_lmid", "Low Mid", -12.0f, 12.0f, 0.0f, Db),
-    PF ("eq_hmid", "High Mid", -12.0f, 12.0f, 0.0f, Db),
-    PF ("eq_high", "High", -12.0f, 12.0f, 0.0f, Db),
+    EQB (1, 1, 90.0f),  EQB (2, 0, 200.0f), EQB (3, 0, 500.0f),  EQB (4, 0, 1000.0f),
+    EQB (5, 0, 2000.0f), EQB (6, 0, 3500.0f), EQB (7, 0, 6500.0f), EQB (8, 2, 10000.0f),
 
     PB ("m1_on", "Mod 1 On", 0.0f),
     PC ("m1_type", "Mod 1 Type", "Chorus|Flanger|Phaser|Tremolo|Vibrato|Rotary|Ring Mod", 0.0f),
@@ -192,6 +206,7 @@ inline const ParamInfo kParams[NumParams] = {
 #undef PF
 #undef PB
 #undef PC
+#undef EQB
 
 static_assert (std::size (kParams) == NumParams, "parameter table out of sync with enum");
 
@@ -242,7 +257,7 @@ inline juce::String paramLabel (int i)
         { Power, Master, "Global" },   { GateOn, GateThr, "Gate" },    { CompOn, CompAtk, "Comp" },
         { WahOn, WahQ, "Wah" },        { PitchOn, PitchMix, "Pitch" }, { BoostOn, BoostGain, "Boost" },
         { DrvOn, DrvLevel, "Drive" },  { AmpOn, AmpPres, "Amp" },      { CabOn, CabType, "Cab" },
-        { EqOn, EqHigh, "EQ" },        { M1On, M1Mix, "Mod 1" },       { M2On, M2Mix, "Mod 2" },
+        { EqOn, Eb8Q, "EQ" },        { M1On, M1Mix, "Mod 1" },       { M2On, M2Mix, "Mod 2" },
         { LoOn, LoMix, "Lo-Fi" },      { DlyOn, DlyMix, "Delay" },     { RevOn, RevMix, "Reverb" },
         { LoopOn, LoopRev, "Looper" }, { VocOn, VocMix, "Vocoder" },   { TbOn, TbMix, "Talk Box" },
         { GrOn, GrMix, "Granular" },   { FrzOn, FrzMix, "Freeze" },    { GltOn, GltMix, "Glitch" },

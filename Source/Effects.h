@@ -1,5 +1,6 @@
 #pragma once
 
+#include <complex>
 #include "Dsp.h"
 
 // Additional effects for Noir Guitar. All are original, allocation-free in the audio path.
@@ -733,5 +734,69 @@ private:
     Biquad hpL, hpR, lpL, lpR;
     juce::SmoothedValue<float> timeSm, mixSm;
     float feedback = 0.3f;
+};
+//==============================================================================
+// 8-band parametric EQ (bell, shelves, cuts, notch, band-pass), one cascade per channel.
+enum EqType { EqBell, EqLowShelf, EqHighShelf, EqLowCut, EqHighCut, EqNotch, EqBandPass, NumEqTypes };
+
+inline void eqCoeffs (Biquad& b, int type, double sr, double f, double gainDb, double q) noexcept
+{
+    q = juce::jlimit (0.1, 18.0, q);
+    switch (type)
+    {
+        case EqLowShelf:  b.lowShelf (sr, f, gainDb); break;
+        case EqHighShelf: b.highShelf (sr, f, gainDb); break;
+        case EqLowCut:    b.highpass (sr, f, juce::jlimit (0.4, 6.0, q * 0.707)); break;
+        case EqHighCut:   b.lowpass (sr, f, juce::jlimit (0.4, 6.0, q * 0.707)); break;
+        case EqNotch:
+        {
+            const double w = 2.0 * kPi * clampFreq (f, sr) / sr, c = std::cos (w), al = std::sin (w) / (2.0 * q);
+            b.set (1.0, -2.0 * c, 1.0, 1.0 + al, -2.0 * c, 1.0 - al);
+            break;
+        }
+        case EqBandPass:  b.bandpass (sr, f, q); break;
+        default:          b.peaking (sr, f, q, gainDb); break;
+    }
+}
+
+// Magnitude response in dB of one biquad at frequency f (used by the EQ display).
+inline double biquadMagDb (const Biquad& b, double sr, double f) noexcept
+{
+    const double w = 2.0 * kPi * f / sr;
+    const std::complex<double> z1 = std::polar (1.0, -w), z2 = std::polar (1.0, -2.0 * w);
+    const auto num = b.b0 + b.b1 * z1 + b.b2 * z2;
+    const auto den = 1.0 + b.a1 * z1 + b.a2 * z2;
+    return 20.0 * std::log10 (std::max (1.0e-9, std::abs (num / den)));
+}
+
+class ProEq
+{
+public:
+    static constexpr int N = 8;
+    struct Band { bool on = false; int type = 0; float f = 1000.0f, g = 0.0f, q = 1.0f; };
+
+    void prepare (double sampleRate) { sr = sampleRate; for (auto& c : cur) c = Band { false, 0, -1.0f, 0.0f, 0.0f }; reset(); }
+    void reset() noexcept { for (auto& b : bq) b.reset(); }
+
+    void setBand (int i, const Band& n) noexcept
+    {
+        auto& c = cur[i];
+        if (n.on == c.on && n.type == c.type && n.f == c.f && n.g == c.g && n.q == c.q) return;
+        if (n.on && ! c.on) bq[i].reset();
+        c = n;
+        if (n.on) eqCoeffs (bq[i], n.type, sr, n.f, n.g, n.q);
+    }
+
+    inline float process (float x) noexcept
+    {
+        for (int i = 0; i < N; ++i)
+            if (cur[i].on) x = bq[i].process (x);
+        return x;
+    }
+
+private:
+    double sr = 44100.0;
+    Band cur[N];
+    Biquad bq[N];
 };
 } // namespace noir

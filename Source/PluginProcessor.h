@@ -76,6 +76,11 @@ public:
     std::atomic<bool> loopUndoOk[4] {};
 
     noir::Tuner& getTuner() { return tuner; }
+    const noir::SpectrumTap& getEqTap() const { return eqTap; }
+    double getSampleRateHz() const { return sr; }
+
+    // UI theme (0 = Pop, 1 = Retro); stored with the session
+    std::atomic<int> uiTheme { 0 };
 
     // ---- DAW integration ------------------------------------------------------------------------------
     static constexpr int NumMacros = 8, LinksPerMacro = 8;
@@ -206,7 +211,7 @@ private:
     Pair<noir::DriveStage> drive;
     Pair<noir::AmpStage> amp;
     Pair<noir::Cabinet> cab;
-    Pair<noir::Eq4> eq;
+    Pair<noir::ProEq> eq;
     Pair<noir::TalkBox> talk;
 
     noir::Vocoder vocoder;
@@ -218,6 +223,7 @@ private:
     noir::TimeDelay delay;
     noir::Looper looper;
     noir::Tuner tuner;
+    noir::SpectrumTap eqTap;
 
     noir::Biquad revHp, revLp, springPeak;
     juce::dsp::Reverb reverb;

@@ -36,7 +36,7 @@ inline const std::vector<PresetDef>& factoryPresets()
             { GateThr, -55 }, { BoostOn, 1 }, { BoostType, 1 }, { BoostGain, 8 },
             { DrvType, 4 }, { DrvDrive, 0.55f }, { DrvTone, 0.55f }, { DrvLevel, 0 },
             { AmpGain, 6.5f }, { AmpMid, 4 }, { AmpTreble, 6 }, { AmpPres, 6 }, { CabType, 2 },
-            { EqOn, 1 }, { EqLow, 2 }, { EqHiMid, 2 } } },
+            { EqOn, 1 }, { Eb1On, 1 }, { Eb1Gain, 2 }, { Eb6On, 1 }, { Eb6Gain, 2 } } },
 
         { "Fuzz Face 60s", {
             { DrvType, 2 }, { DrvDrive, 0.7f }, { DrvTone, 0.4f }, { AmpGain, 4 }, { CabType, 0 },
@@ -88,7 +88,7 @@ inline const std::vector<PresetDef>& factoryPresets()
 
         { "Lo-Fi Radio", {
             { DrvDrive, 0.3f }, { LoOn, 1 }, { LoBits, 0.55f }, { LoRate, 0.35f }, { LoMix, 0.6f },
-            { EqOn, 1 }, { EqLow, -6 }, { EqHiMid, 4 },
+            { EqOn, 1 }, { Eb1On, 1 }, { Eb1Gain, -6 }, { Eb6On, 1 }, { Eb6Gain, 4 },
             { RevOn, 1 }, { RevType, 0 }, { RevMix, 0.2f } } },
 
         { "Octave Fuzz Lead", {

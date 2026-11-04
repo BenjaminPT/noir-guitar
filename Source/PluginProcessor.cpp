@@ -232,7 +232,12 @@ void NoirProcessor::updateParams()
     drive.each ([&] (auto& e) { e.setParams (on (DrvOn), (int) v (DrvType), v (DrvDrive), v (DrvTone), v (DrvLevel)); });
     amp.each ([&] (auto& e) { e.setParams (v (AmpGain), v (AmpBass), v (AmpMid), v (AmpTreble), v (AmpPres)); });
     cab.each ([&] (auto& e) { e.setVoicing ((int) v (CabType)); });
-    eq.each ([&] (auto& e) { e.setParams (v (EqLow), v (EqLowMid), v (EqHiMid), v (EqHigh)); });
+    for (int b = 0; b < kEqBands; ++b)
+    {
+        const noir::ProEq::Band nb { on (eqParam (b, EqfOn)), (int) v (eqParam (b, EqfType)),
+                                     v (eqParam (b, EqfFreq)), v (eqParam (b, EqfGain)), v (eqParam (b, EqfQ)) };
+        eq.each ([&] (auto& e) { e.setBand (b, nb); });
+    }
     talk.each ([&] (auto& e) { e.setParams (v (TbVowel), v (TbAuto), v (TbRes), v (TbMix)); });
 
     vocoder.setParams (v (VocSens), v (VocBright));
@@ -446,7 +451,10 @@ void NoirProcessor::runSlot (int slot)
             break;
         }
 
-        case SEq:   monoStage (fSlot[SEq],   [&] (int ch, float x) { return eq[ch].process (x); }); break;
+        case SEq:
+            monoStage (fSlot[SEq], [&] (int ch, float x) { return eq[ch].process (x); });
+            for (int i = 0; i < n; ++i) eqTap.push (chanL[i]);
+            break;
         case STalk: monoStage (fSlot[STalk], [&] (int ch, float x) { return talk[ch].process (x); }); break;
 
         case SVoc:
@@ -1194,6 +1202,7 @@ void NoirProcessor::getStateInformation (juce::MemoryBlock& destData)
     juce::StringArray parts;
     for (int s : getChainOrder()) parts.add (juce::String (s));
     state.setProperty ("order", parts.joinIntoString (","), nullptr);
+    state.setProperty ("theme", uiTheme.load(), nullptr);
 
     juce::StringArray midiParts, macroParts;
     for (int i = 0; i < MaxBindings; ++i)
@@ -1223,6 +1232,7 @@ void NoirProcessor::setStateInformation (const void* data, int size)
             auto tree = juce::ValueTree::fromXml (*xml);
             const auto path = tree.getProperty ("irPath").toString();
             const auto orderStr = tree.getProperty ("order").toString();
+            uiTheme.store (juce::jlimit (0, 1, (int) tree.getProperty ("theme", 0)));
             const auto midiStr = tree.getProperty ("midibind").toString();
             const auto legacyMidi = tree.getProperty ("midimap").toString();
             const auto macroStr = tree.getProperty ("macros").toString();
