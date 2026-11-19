@@ -576,13 +576,14 @@ void NoirProcessor::runSlot (int slot)
                 loopFifo.finishedRead (size1 + size2);
             }
 
+            const uint32_t loopMuteBits = loopMute.load (std::memory_order_relaxed);
             looper.setQuantize (on (LoopQuant) ? beatsPerBar * 60.0 / bpm * sr : 0.0);
 
             if (on (LoopFollow) && hostKnown.load())
             {
                 if (hostPlaying && ! lastHostPlaying)
                 {
-                    for (int t = 0; t < 4; ++t)
+                    for (int t = 0; t < noir::Looper::NumTracks; ++t)
                         if (looper.trackHas (t) && looper.trackMode (t) == noir::Looper::Stop)
                             looper.setMode (t, noir::Looper::Play);
                 }
@@ -610,7 +611,7 @@ void NoirProcessor::runSlot (int slot)
                 for (int i = 0; i < n; ++i)
                 {
                     float ol, orr;
-                    looper.process (chanL[i], chanR[i], loopLevel, spd, rev, loopMuteMask, ol, orr);
+                    looper.process (chanL[i], chanR[i], loopLevel, spd, rev, loopMuteBits, ol, orr);
                     const float k = fSlot[SLooper].next();
                     chanL[i] += (ol - chanL[i]) * k;
                     chanR[i] += (orr - chanR[i]) * k;
@@ -642,7 +643,6 @@ void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     handleMidi (midi);
     applyMacros();
     readHost();
-    loopMuteMask = (on (LoopMute1) ? 1 : 0) | (on (LoopMute2) ? 2 : 0) | (on (LoopMute3) ? 4 : 0) | (on (LoopMute4) ? 8 : 0);
 
     fPower.set (on (Power));
     const bool tunerOn = on (TunerOn);
@@ -771,9 +771,9 @@ void NoirProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         buffer.clear (ch, 0, total);
 
     lastHostPlaying = hostPlaying;
-    loopProgress.store (looper.progress());
+    looper.publishUi();
     loopHasData.store (looper.hasLoop());
-    for (int t = 0; t < 4; ++t) { loopState[t].store (looper.uiState (t)); loopUndoOk[t].store (looper.trackCanUndo (t)); }
+    for (int t = 0; t < noir::Looper::NumTracks; ++t) { loopState[t].store (looper.uiState (t)); loopUndoOk[t].store (looper.trackCanUndo (t)); }
 
     // Meters: the editor reads and resets these.
     if (inPk  > inPeak.load())  inPeak.store (inPk);
@@ -860,14 +860,15 @@ void NoirProcessor::loadPreset (int index)
 void NoirProcessor::loopRequest (int track, int cmd)
 {
     if (cmd == LcRecord || cmd == LcPlay || cmd == LcOverdub) setParamValue (LoopOn, 1.0f);
+    if (cmd == LcRecord || cmd == LcOverdub) looper.ensure (track);   // allocate the 20 s buffer here, never on the audio thread
     int s1, n1, s2, n2;
     loopFifo.prepareToWrite (1, s1, n1, s2, n2);
-    if (n1 > 0) { loopBuf[s1] = (juce::jlimit (0, 3, track) << 8) | cmd; loopFifo.finishedWrite (1); }
+    if (n1 > 0) { loopBuf[s1] = (juce::jlimit (0, noir::Looper::NumTracks - 1, track) << 8) | cmd; loopFifo.finishedWrite (1); }
 }
 
 void NoirProcessor::doLoopCommand (int t, int cmd) noexcept
 {
-    t = juce::jlimit (0, 3, t);
+    t = juce::jlimit (0, noir::Looper::NumTracks - 1, t);
     const int st = looper.uiState (t);
     switch (cmd)
     {
@@ -1012,8 +1013,8 @@ void NoirProcessor::applyBinding (const MidiBinding& b, int type, int value, boo
         case ActLoopUndo: if (risingEdge) doLoopCommand (sel, LcUndo);    break;
         case ActLoopClear: if (risingEdge) doLoopCommand (sel, LcClear);  break;
         case ActLoopStopAll: if (risingEdge) doLoopCommand (sel, LcStopAll); break;
-        case ActTrackNext: if (risingEdge) setParamNormalised (LoopTrack, (float) ((sel + 1) % 4) / 3.0f); break;
-        case ActTrackPrev: if (risingEdge) setParamNormalised (LoopTrack, (float) ((sel + 3) % 4) / 3.0f); break;
+        case ActTrackNext: if (risingEdge) setParamNormalised (LoopTrack, (float) ((sel + 1) % noir::Looper::NumTracks) / (float) (noir::Looper::NumTracks - 1)); break;
+        case ActTrackPrev: if (risingEdge) setParamNormalised (LoopTrack, (float) ((sel + noir::Looper::NumTracks - 1) % noir::Looper::NumTracks) / (float) (noir::Looper::NumTracks - 1)); break;
 
         case ActParam:
         {
@@ -1306,7 +1307,7 @@ bool NoirProcessor::isPresetParam (int id)
 {
     if (id < 0 || id >= NumParams) return false;
     if (id == Power || id == InGain || id == OutGain || id == TunerOn || id == TunerRef) return false;
-    if (id == LoopMode || id == LoopTrack || (id >= LoopMute1 && id <= LoopMute4)) return false;
+    if (id == LoopMode || id == LoopTrack) return false;
     if (id >= Macro1 && id <= Macro8) return false;
     if (id == BpmManual || id == HostSync || id == LoopFollow || id == LoopQuant) return false;
     return true;

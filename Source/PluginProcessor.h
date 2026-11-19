@@ -70,11 +70,12 @@ public:
     // Looper controls (message thread -> audio thread)
     enum LoopCmd { LcStop, LcRecord, LcPlay, LcOverdub, LcUndo, LcClear, LcStopAll, LcClearAll };
     void loopRequest (int track, int cmd);                    // message thread -> audio thread (lock-free)
-    int  selectedLoopTrack() const { return juce::jlimit (0, 3, (int) raw[LoopTrack]->load()); }
-    std::atomic<float> loopProgress { 0.0f };
+    int  selectedLoopTrack() const { return juce::jlimit (0, noir::Looper::NumTracks - 1, (int) raw[LoopTrack]->load()); }
     std::atomic<bool> loopHasData { false };
-    std::atomic<int> loopState[4] {};                         // 0 empty, 1 stopped, 2 playing, 3 overdub, 4 recording
-    std::atomic<bool> loopUndoOk[4] {};
+    std::atomic<int> loopState[noir::Looper::NumTracks] {};                         // 0 empty, 1 stopped, 2 playing, 3 overdub, 4 recording
+    std::atomic<bool> loopUndoOk[noir::Looper::NumTracks] {};
+    std::atomic<uint32_t> loopMute { 0 };                     // bit t = track t muted
+    noir::Looper& loopEngine() { return looper; }
 
     noir::Tuner& getTuner() { return tuner; }
     const noir::SpectrumTap& getEqTap() const { return eqTap; }
@@ -264,7 +265,6 @@ private:
     std::atomic<bool> irLoaded { false };
     noir::Limiter limiter;
     bool nanFlag = false;
-    int loopMuteMask = 0;
     bool wasIR = false, wasActive = false;
     int lastRevType = -1, lastLoopMode = 0, revIdle = 3, dlyIdle = 3;
 

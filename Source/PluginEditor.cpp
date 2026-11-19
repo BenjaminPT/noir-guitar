@@ -410,6 +410,8 @@ LooperView::LooperView (NoirProcessor& p) : proc (p)
     rec.getProperties().set ("accent", (int) cGlit.getARGB());
     play.getProperties().set ("accent", (int) juce::Colour (0xff4be07a).getARGB());
     dub.getProperties().set ("accent", (int) cAmp.getARGB());
+    undo.setButtonText ("FULL");
+    undo.setTooltip ("Reset the trim of the selected track to the whole take");
 
     rev.setButtonText ("REVERSE");
     rev.getProperties().set ("label", true);
@@ -420,15 +422,34 @@ LooperView::LooperView (NoirProcessor& p) : proc (p)
     play.onClick  = [this] { proc.loopRequest (selected, NoirProcessor::LcPlay); };
     dub.onClick   = [this] { proc.loopRequest (selected, NoirProcessor::LcOverdub); };
     stop.onClick  = [this] { proc.loopRequest (selected, NoirProcessor::LcStop); };
-    undo.onClick  = [this] { proc.loopRequest (selected, NoirProcessor::LcUndo); };
+    undo.onClick  = [this] { proc.loopEngine().undo (selected); };
     clear.onClick = [this] { proc.loopRequest (selected, NoirProcessor::LcClear); };
     stopAll.onClick = [this] { proc.loopRequest (selected, NoirProcessor::LcStopAll); };
 }
 
+namespace
+{
+constexpr int kLoopRowH = 46;
+constexpr int kStateW = 92;     // left block of a row: number + state
+constexpr int kMuteW = 34;      // right block of a row: mute
+constexpr int kGrab = 9;        // trim handle grab distance (px)
+}
+
 juce::Rectangle<int> LooperView::rowBounds (int t) const
 {
-    const int h = rows.getHeight() / 4;
-    return { rows.getX(), rows.getY() + t * h, rows.getWidth(), h };
+    return { rows.getX(), rows.getY() + t * kLoopRowH - (int) scroll, rows.getWidth() - 6, kLoopRowH };
+}
+
+juce::Rectangle<int> LooperView::waveBounds (int t) const
+{
+    const auto rb = rowBounds (t).reduced (0, 4);
+    return { rb.getX() + kStateW, rb.getY(), rb.getWidth() - kStateW - kMuteW, rb.getHeight() };
+}
+
+void LooperView::clampScroll()
+{
+    const float maxScroll = (float) juce::jmax (0, noir::Looper::NumTracks * kLoopRowH - rows.getHeight());
+    scroll = juce::jlimit (0.0f, maxScroll, scroll);
 }
 
 void LooperView::resized()
@@ -436,7 +457,8 @@ void LooperView::resized()
     auto a = getLocalBounds();
     auto right = a.removeFromRight (juce::jmin (176, a.getWidth() * 2 / 5));
     a.removeFromRight (8);
-    rows = a;
+    rows = a.reduced (0, 2);
+    clampScroll();
 
     const int rh = right.getHeight() / 4;
     auto r1 = right.removeFromTop (rh).reduced (0, 2), r2 = right.removeFromTop (rh).reduced (0, 2);
@@ -461,7 +483,18 @@ void LooperView::refresh()
     rec.getProperties().set ("accent", (int) cGlit.getARGB());
     play.getProperties().set ("accent", (int) juce::Colour (0xff4be07a).getARGB());
     dub.getProperties().set ("accent", (int) cAmp.getARGB());
-    selected = proc.selectedLoopTrack();
+
+    const int newSel = proc.selectedLoopTrack();
+    if (newSel != selected)
+    {
+        selected = newSel;
+        const float top = (float) (selected * kLoopRowH), bottom = top + (float) kLoopRowH;     // keep it in view
+        if (top < scroll) scroll = top;
+        else if (bottom > scroll + (float) rows.getHeight()) scroll = bottom - (float) rows.getHeight();
+        clampScroll();
+    }
+    proc.loopEngine().ensure (selected);                    // 20 s buffer for the selected track (message thread)
+
     const int st = proc.loopState[selected].load();
     rec.setToggleState (st == 4, juce::dontSendNotification);
     play.setToggleState (st == 2, juce::dontSendNotification);
@@ -472,82 +505,237 @@ void LooperView::refresh()
     repaint();
 }
 
+// 0 = none, 1 = start handle, 2 = end handle
+int LooperView::hitHandle (int t, juce::Point<int> pos) const
+{
+    auto& lp = proc.loopEngine();
+    const int len = lp.length (t);
+    if (len <= 0 || proc.loopState[t].load() == 4) return 0;
+    const auto wb = waveBounds (t);
+    if (pos.y < wb.getY() - 2 || pos.y > wb.getBottom() + 2) return 0;
+    const float xa = (float) wb.getX() + (float) wb.getWidth() * (float) lp.trimStart (t) / (float) len;
+    const float xb = (float) wb.getX() + (float) wb.getWidth() * (float) lp.trimEnd (t) / (float) len;
+    const float da = std::abs ((float) pos.x - xa), db = std::abs ((float) pos.x - xb);
+    if (da > (float) kGrab && db > (float) kGrab) return 0;
+    return da <= db ? 1 : 2;
+}
+
+void LooperView::mouseMove (const juce::MouseEvent& e)
+{
+    int h = 0;
+    for (int t = 0; t < noir::Looper::NumTracks && h == 0; ++t)
+        if (rowBounds (t).contains (e.getPosition())) h = hitHandle (t, e.getPosition());
+    setMouseCursor (h != 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+}
+
 void LooperView::mouseDown (const juce::MouseEvent& e)
 {
-    for (int t = 0; t < 4; ++t)
+    drag = 0;
+    if (! rows.contains (e.getPosition())) return;
+    for (int t = 0; t < noir::Looper::NumTracks; ++t)
     {
         const auto rb = rowBounds (t);
         if (! rb.contains (e.getPosition())) continue;
-        if (e.x > rb.getRight() - 30)
+        if (e.x > rb.getRight() - kMuteW)
         {
-            const Id id = (Id) (LoopMute1 + t);
-            if (auto* p = proc.param (id)) { p->beginChangeGesture(); p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f); p->endChangeGesture(); }
+            proc.loopMute.fetch_xor (1u << t);
+            return;
         }
-        else
-            proc.setParamValue (LoopTrack, (float) t);
+        if (const int h = hitHandle (t, e.getPosition()))
+        {
+            drag = h; dragTrack = t;
+            if (t != selected) proc.setParamValue (LoopTrack, (float) t);
+            return;
+        }
+        proc.setParamValue (LoopTrack, (float) t);
         return;
     }
 }
 
+void LooperView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (drag == 0) return;
+    auto& lp = proc.loopEngine();
+    const int len = lp.length (dragTrack);
+    if (len <= 0) return;
+    const auto wb = waveBounds (dragTrack);
+    const float f = juce::jlimit (0.0f, 1.0f, ((float) e.x - (float) wb.getX()) / (float) juce::jmax (1, wb.getWidth()));
+    const int s = (int) (f * (float) len);
+    if (drag == 1) lp.setTrim (dragTrack, s, lp.trimEnd (dragTrack));
+    else           lp.setTrim (dragTrack, lp.trimStart (dragTrack), s);
+    repaint();
+}
+
+void LooperView::mouseUp (const juce::MouseEvent&) { drag = 0; }
+
+void LooperView::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    for (int t = 0; t < noir::Looper::NumTracks; ++t)
+        if (waveBounds (t).contains (e.getPosition())) { proc.loopEngine().undo (t); return; }
+}
+
+void LooperView::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
+{
+    scroll -= w.deltaY * 140.0f;
+    clampScroll();
+    repaint();
+}
+
 void LooperView::paint (juce::Graphics& g)
 {
-    static const char* names[5] = { "EMPTY", "STOPPED", "PLAYING", "OVERDUB", "RECORDING" };
+    static const char* names[5] = { "EMPTY", "STOPPED", "PLAYING", "OVERDUB", "REC" };
     const juce::Colour cols[5] = { L::hdrDim, L::hdrDim.brighter (0.2f), juce::Colour (0xff4be07a), cAmp, cGlit };
-    const float prog = proc.loopProgress.load();
+    auto& lp = proc.loopEngine();
+    const uint32_t muteBits = proc.loopMute.load();
+    const int maxLen = juce::jmax (1, lp.maxSamples());
+    const int binSz = juce::jmax (1, lp.samplesPerBin());
+
     g.setColour (L::inset);
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
 
-    for (int t = 0; t < 4; ++t)
     {
-        const auto rb = rowBounds (t).reduced (0, 2).toFloat();
-        const int st = proc.loopState[t].load();
-        const bool sel = t == selected;
-        const bool muted = proc.apvts.getRawParameterValue (kParams[LoopMute1 + t].id)->load() > 0.5f;
-        const auto col = cols[juce::jlimit (0, 4, st)];
+        juce::Graphics::ScopedSaveState ss (g);
+        g.reduceClipRegion (rows);
 
-        g.setColour (sel ? cLoop.withAlpha (0.14f) : juce::Colours::transparentBlack);
-        g.fillRoundedRectangle (rb, 6.0f);
-        g.setColour (sel ? cLoop : L::insetLine);
-        g.drawRoundedRectangle (rb.reduced (0.5f), 6.0f, sel ? 1.4f : 1.0f);
-
-        const auto badge = juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ rb.getX() + 16.0f, rb.getCentreY() });
-        g.setColour (sel ? cLoop : L::insetLine.brighter (0.2f));
-        g.fillEllipse (badge);
-        g.setColour (sel ? ink : L::hdrText);
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (juce::String (t + 1), badge.toNearestInt(), juce::Justification::centred);
-
-        // state lamp + text
-        const auto lamp = juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ rb.getX() + 40.0f, rb.getCentreY() });
-        float pulse = 1.0f;
-        if (st == 4) pulse = 0.55f + 0.45f * std::sin (spin * 6.2832f * 3.0f);
-        g.setColour (col.withAlpha (pulse));
-        g.fillEllipse (lamp);
-        g.setColour (st == 0 ? L::hdrDim : col);
-        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-        g.drawText (names[juce::jlimit (0, 4, st)], (int) rb.getX() + 50, (int) rb.getY(), 76, (int) rb.getHeight(), juce::Justification::centredLeft);
-
-        // progress
-        auto bar = rb.withTrimmedLeft (128.0f).withTrimmedRight (34.0f);
-        bar = bar.withSizeKeepingCentre (bar.getWidth(), 5.0f);
-        g.setColour (L::insetLine);
-        g.fillRoundedRectangle (bar, 2.5f);
-        if (st >= 1 && st != 4)
+        for (int t = 0; t < noir::Looper::NumTracks; ++t)
         {
-            g.setColour ((muted ? L::hdrDim : col).withAlpha (0.9f));
-            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * prog), 2.5f);
-            g.fillEllipse (bar.getX() + bar.getWidth() * prog - 4.0f, bar.getCentreY() - 4.0f, 8.0f, 8.0f);
+            const auto rbi = rowBounds (t);
+            if (rbi.getBottom() < rows.getY() || rbi.getY() > rows.getBottom()) continue;
+
+            const auto rb = rbi.reduced (0, 2).toFloat();
+            const int st = proc.loopState[t].load();
+            const bool sel = t == selected;
+            const bool muted = (muteBits & (1u << t)) != 0;
+            const auto col = cols[juce::jlimit (0, 4, st)];
+
+            g.setColour (sel ? cLoop.withAlpha (0.14f) : juce::Colours::transparentBlack);
+            g.fillRoundedRectangle (rb, 6.0f);
+            g.setColour (sel ? cLoop : L::insetLine);
+            g.drawRoundedRectangle (rb.reduced (0.5f), 6.0f, sel ? 1.4f : 1.0f);
+
+            // number badge + state lamp / text
+            const auto badge = juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ rb.getX() + 15.0f, rb.getCentreY() });
+            g.setColour (sel ? cLoop : L::insetLine.brighter (0.2f));
+            g.fillEllipse (badge);
+            g.setColour (sel ? ink : L::hdrText);
+            g.setFont (juce::FontOptions (t >= 9 ? 9.5f : 11.0f, juce::Font::bold));
+            g.drawText (juce::String (t + 1), badge.toNearestInt(), juce::Justification::centred);
+
+            const auto lamp = juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ rb.getX() + 35.0f, rb.getCentreY() });
+            float pulse = 1.0f;
+            if (st == 4) pulse = 0.55f + 0.45f * std::sin (spin * 6.2832f * 3.0f);
+            g.setColour (col.withAlpha (pulse));
+            g.fillEllipse (lamp);
+            g.setColour (st == 0 ? L::hdrDim : col);
+            g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+            g.drawText (names[juce::jlimit (0, 4, st)], (int) rb.getX() + 42, (int) rb.getY(), kStateW - 44, (int) rb.getHeight(), juce::Justification::centredLeft);
+
+            // waveform + trim window
+            const auto wb = waveBounds (t).toFloat();
+            g.setColour (L::insetLine.withAlpha (0.35f));
+            g.fillRoundedRectangle (wb, 4.0f);
+
+            const int len = lp.length (t);
+            if (len > 0)
+            {
+                const bool recording = st == 4;
+                const int span = recording ? maxLen : len;               // a take that is being recorded grows towards 20 s
+                const int a = recording ? 0 : lp.trimStart (t), b = recording ? len : lp.trimEnd (t);
+                const int nBins = juce::jmin (noir::Looper::NumPeaks, (span + binSz - 1) / binSz);
+                const float midY = wb.getCentreY(), halfH = wb.getHeight() * 0.46f;
+                const int w = (int) wb.getWidth();
+                const float xA = wb.getX() + wb.getWidth() * (float) a / (float) span;
+                const float xB = wb.getX() + wb.getWidth() * (float) b / (float) span;
+
+                juce::Path wave;
+                for (int px = 0; px < w; ++px)
+                {
+                    const int b0 = juce::jlimit (0, nBins - 1, (int) ((int64_t) px * nBins / w));
+                    const int b1 = juce::jlimit (b0, nBins - 1, (int) ((int64_t) (px + 1) * nBins / w));
+                    float pk = 0.0f;
+                    for (int i = b0; i <= b1; ++i) pk = juce::jmax (pk, lp.peak (t, i));
+                    const float h = juce::jmax (0.6f, std::pow (juce::jmin (1.0f, pk), 0.6f) * halfH);
+                    const float x = wb.getX() + (float) px + 0.5f;
+                    wave.addRectangle (x - 0.5f, midY - h, 1.0f, h * 2.0f);
+                }
+
+                {   // dimmed outside the window, bright inside
+                    juce::Graphics::ScopedSaveState s2 (g);
+                    g.reduceClipRegion (wb.toNearestInt());
+                    g.setColour ((muted ? L::hdrDim : col).withAlpha (0.28f));
+                    g.fillPath (wave);
+                    juce::Graphics::ScopedSaveState s3 (g);
+                    g.reduceClipRegion (juce::Rectangle<float> (xA, wb.getY(), juce::jmax (0.0f, xB - xA), wb.getHeight()).toNearestInt());
+                    g.setColour ((muted ? L::hdrDim : (st == 0 ? cLoop : col)).withAlpha (0.95f));
+                    g.fillPath (wave);
+                }
+
+                if (! recording)
+                {
+                    g.setColour (juce::Colours::black.withAlpha (0.35f));
+                    g.fillRect (wb.getX(), wb.getY(), juce::jmax (0.0f, xA - wb.getX()), wb.getHeight());
+                    g.fillRect (xB, wb.getY(), juce::jmax (0.0f, wb.getRight() - xB), wb.getHeight());
+
+                    for (int hnd = 0; hnd < 2; ++hnd)                    // trim handles
+                    {
+                        const float x = hnd == 0 ? xA : xB;
+                        const bool active = drag == hnd + 1 && dragTrack == t;
+                        g.setColour (active ? cAmp : cLoop);
+                        g.fillRect (x - 1.0f, wb.getY(), 2.0f, wb.getHeight());
+                        const auto grip = juce::Rectangle<float> (7.0f, 16.0f).withCentre ({ hnd == 0 ? x - 2.0f : x + 2.0f, midY });
+                        g.fillRoundedRectangle (grip, 2.5f);
+                        g.setColour (ink);
+                        g.fillRect (grip.getCentreX() - 0.5f, grip.getY() + 3.0f, 1.0f, grip.getHeight() - 6.0f);
+                    }
+
+                    if (st >= 2)                                         // playhead
+                    {
+                        const float x = wb.getX() + wb.getWidth() * (float) lp.playPos (t) / (float) span;
+                        g.setColour (juce::Colours::white.withAlpha (0.85f));
+                        g.fillRect (x - 0.5f, wb.getY(), 1.0f, wb.getHeight());
+                    }
+
+                    // trimmed length in seconds
+                    g.setColour (L::hdrText.withAlpha (0.75f));
+                    g.setFont (juce::FontOptions (9.0f));
+                    g.drawText (juce::String ((double) (b - a) / lp.sampleRate(), 2) + " s",
+                                wb.toNearestInt().reduced (4, 1), juce::Justification::topRight);
+                }
+                else
+                {
+                    g.setColour (cGlit.withAlpha (0.9f));
+                    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+                    g.drawText (juce::String ((double) len / lp.sampleRate(), 1) + " / 20 s",
+                                wb.toNearestInt().reduced (4, 1), juce::Justification::topRight);
+                }
+            }
+            else
+            {
+                g.setColour (L::hdrDim.withAlpha (0.7f));
+                g.setFont (juce::FontOptions (9.5f));
+                g.drawText (sel ? "press REC (up to 20 s)" : "empty", wb.toNearestInt(), juce::Justification::centred);
+            }
+
+            // mute
+            const auto m = juce::Rectangle<float> (22.0f, 18.0f).withCentre ({ rb.getRight() - 18.0f, rb.getCentreY() });
+            g.setColour (muted ? cGlit : juce::Colours::transparentBlack);
+            g.fillRoundedRectangle (m, 4.0f);
+            g.setColour (muted ? cGlit : L::insetLine);
+            g.drawRoundedRectangle (m, 4.0f, 1.0f);
+            g.setColour (muted ? ink : L::hdrDim);
+            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawText ("M", m.toNearestInt(), juce::Justification::centred);
         }
 
-        // mute
-        const auto m = juce::Rectangle<float> (22.0f, 18.0f).withCentre ({ rb.getRight() - 18.0f, rb.getCentreY() });
-        g.setColour (muted ? cGlit : juce::Colours::transparentBlack);
-        g.fillRoundedRectangle (m, 4.0f);
-        g.setColour (muted ? cGlit : L::insetLine);
-        g.drawRoundedRectangle (m, 4.0f, 1.0f);
-        g.setColour (muted ? ink : L::hdrDim);
-        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-        g.drawText ("M", m.toNearestInt(), juce::Justification::centred);
+        // slim scroll bar
+        const float total = (float) (noir::Looper::NumTracks * kLoopRowH);
+        if (total > (float) rows.getHeight())
+        {
+            const float th = juce::jmax (18.0f, rows.getHeight() * rows.getHeight() / total);
+            const float ty = rows.getY() + (rows.getHeight() - th) * (scroll / (total - (float) rows.getHeight()));
+            g.setColour (L::hdrDim.withAlpha (0.5f));
+            g.fillRoundedRectangle ((float) rows.getRight() - 4.0f, ty, 3.0f, th, 1.5f);
+        }
     }
 }
 
@@ -1546,7 +1734,7 @@ Pedal* NoirEditor::makePedal (int slot)
         case SFreeze: return make ("Freeze",     cGrain, FrzOn,   -1,        { FrzSize, FrzMix },                  "Hold / infinite sustain");
         case SDelay:  return make ("Delay",      cTime,  DlyOn,   DlyType,   { DlyTime, DlyFb, DlyMix },           "Echo");
         case SReverb: return make ("Reverb",     cTime,  RevOn,   RevType,   { RevSize, RevMix },                  "Space");
-        case SLooper: return make ("Looper",     cLoop,  LoopOn,  LoopSpeed, { LoopLevel },                        "4 tracks  /  record, overdub");
+        case SLooper: return make ("Looper",     cLoop,  LoopOn,  LoopSpeed, { LoopLevel },                        "30 tracks  /  record, overdub");
         default:      return nullptr;
     }
 }
@@ -1655,9 +1843,10 @@ NoirEditor::NoirEditor (NoirProcessor& p) : AudioProcessorEditor (&p), proc (p)
         return juce::Rectangle<int>();
     };
 
-    // Looper: four tracks
+    // Looper: 30 tracks
     auto* lp = bySlot[SLooper];
-    lp->setDesiredWidth (520);
+    lp->setDesiredWidth (660);
+    lp->minRowHeight = 320;
     looperView = std::make_unique<LooperView> (proc);
     lp->addAndMakeVisible (*looperView);
     lp->onLayoutBody = [this] (juce::Rectangle<int> body)

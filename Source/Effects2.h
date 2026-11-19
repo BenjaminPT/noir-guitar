@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "Effects.h"
 
@@ -21,240 +22,291 @@ struct Rng
 inline int nextPow2 (int n) { int p = 1; while (p < n) p <<= 1; return p; }
 
 //==============================================================================
-// Four-track stereo looper (Boss RC style). The first recording sets the loop length; the other tracks are
-// recorded against it. Undo / redo swaps buffers (no copying), clearing is spread over time: nothing here
-// ever blocks the audio thread.
+// Multi-track looper: up to 30 independent tracks, each up to 20 s (mono). Every track has its own length,
+// plays in a loop until it is stopped, and has a non-destructive trim window [trimStart, trimEnd) that the UI can
+// drag. Each track keeps a coarse peak table for the waveform view. Buffers are allocated on the message thread
+// (ensure()) and published through an atomic pointer, so the audio thread never allocates or blocks.
 class Looper
 {
 public:
     enum Mode { Stop, Record, Play, Overdub };
-    static constexpr int NumTracks = 4;
+    static constexpr int NumTracks = 30;
+    static constexpr int NumPeaks = 640;
+    static constexpr double MaxSeconds = 20.0;
+    static constexpr int PreAllocated = 8;
 
     void prepare (double sampleRate)
     {
         sr = sampleRate;
-        maxLen = juce::jmin ((int) (30.0 * sr), 1500000);
-        for (auto& t : tr)
+        maxLen = (int) (MaxSeconds * sr);
+        binSize = juce::jmax (1, maxLen / NumPeaks);
+        for (int t = 0; t < NumTracks; ++t)
         {
-            t.L.assign ((size_t) maxLen, 0.0f); t.R.assign ((size_t) maxLen, 0.0f);
-            t.uL.assign ((size_t) maxLen, 0.0f); t.uR.assign ((size_t) maxLen, 0.0f);
-            t.copied.assign ((size_t) maxLen, 0);
-            t.reset();
+            auto& k = tr[t];
+            k.data.store (nullptr);
+            k.store.reset();
+            k.reset();
+            if (t < PreAllocated) ensure (t);
         }
-        length = 0; posD = 0.0; recMaster = -1;
+        recording = -1;
     }
 
-    int  trackMode (int t) const noexcept { return tr[t].mode; }
-    bool trackHas (int t) const noexcept { return tr[t].has; }
-    bool trackCanUndo (int t) const noexcept { return tr[t].undoReady; }
+    // Message thread: make sure the track has a buffer (20 s of mono audio).
+    void ensure (int t)
+    {
+        t = juce::jlimit (0, NumTracks - 1, t);
+        auto& k = tr[t];
+        if (k.data.load (std::memory_order_acquire) != nullptr || maxLen <= 0) return;
+        k.store.reset (new float[(size_t) maxLen]());
+        k.data.store (k.store.get(), std::memory_order_release);
+    }
+
+    bool ready (int t) const noexcept { return tr[t].data.load (std::memory_order_acquire) != nullptr; }
+
+    // ---- state read by the UI ----------------------------------------------------------------------
     // 0 empty, 1 stopped, 2 playing, 3 overdubbing, 4 recording
     int uiState (int t) const noexcept
     {
         const auto& k = tr[t];
-        if (recMaster == t || (k.recording && k.mode == Overdub)) return 4;
+        if (k.recording) return 4;
         if (! k.has) return 0;
         return k.mode == Stop ? 1 : (k.mode == Play ? 2 : 3);
     }
-    bool hasLoop() const noexcept { return length > 0; }
-    float progress() const noexcept { return length > 0 ? (float) (posD / (double) length) : 0.0f; }
+    int  trackMode (int t) const noexcept { return tr[t].mode; }
+    bool trackHas (int t) const noexcept { return tr[t].has; }
+    bool trackCanUndo (int t) const noexcept { return tr[t].has && (tr[t].trimA.load() != 0 || tr[t].trimB.load() != tr[t].len.load()); }
     bool anyRunning() const noexcept { for (auto& t : tr) if (t.mode != Stop) return true; return false; }
+    bool hasLoop() const noexcept { for (auto& t : tr) if (t.has) return true; return false; }
+
+    int length (int t) const noexcept    { return tr[t].len.load (std::memory_order_relaxed); }
+    int trimStart (int t) const noexcept { return tr[t].trimA.load (std::memory_order_relaxed); }
+    int trimEnd (int t) const noexcept   { return tr[t].trimB.load (std::memory_order_relaxed); }
+    int playPos (int t) const noexcept   { return tr[t].posUi.load (std::memory_order_relaxed); }
+    double sampleRate() const noexcept   { return sr; }
+    int maxSamples() const noexcept      { return maxLen; }
+    int samplesPerBin() const noexcept   { return binSize; }
+    float peak (int t, int bin) const noexcept { return tr[t].peaks[bin].load (std::memory_order_relaxed); }
+
+    // Message thread: move the trim window (samples). Safe against the audio thread (plain atomics).
+    void setTrim (int t, int a, int b) noexcept
+    {
+        auto& k = tr[t];
+        const int len = k.len.load();
+        if (len <= 0) return;
+        const int minRegion = juce::jmin (len, (int) (0.02 * sr));
+        a = juce::jlimit (0, len - minRegion, a);
+        b = juce::jlimit (a + minRegion, len, b);
+        k.trimA.store (a); k.trimB.store (b);
+    }
+
+    void publishUi() noexcept { for (auto& k : tr) k.posUi.store ((int) k.pos, std::memory_order_relaxed); }
 
     void setQuantize (double samplesPerBar) noexcept { quantSamples = samplesPerBar; }
 
-    // Lock the loop position to the host timeline (seconds) while playing.
+    // Host transport lock: while the host plays, keep each running track on the host timeline.
     void syncTo (double seconds) noexcept
     {
-        if (length <= 0 || ! anyRunning() || recMaster >= 0) return;
-        double t = std::fmod (seconds * sr, (double) length);
-        if (t < 0.0) t += (double) length;
-        double d = std::abs (t - posD);
-        d = juce::jmin (d, (double) length - d);
-        if (d > 256.0) posD = t;
+        for (auto& k : tr)
+        {
+            if (k.mode == Stop || ! k.has || k.recording) continue;
+            const int a = k.trimA.load(), b = k.trimB.load();
+            const double region = (double) (b - a);
+            if (region < 64.0) continue;
+            double t = std::fmod (seconds * sr, region);
+            if (t < 0.0) t += region;
+            const double cur = k.pos - (double) a;
+            double d = std::abs (t - cur);
+            d = juce::jmin (d, region - d);
+            if (d > 256.0) k.pos = (double) a + t;
+        }
     }
 
     void clear (int t) noexcept
     {
-        tr[t].reset();
-        tr[t].dirty = true; tr[t].zeroPos = 0;
-        if (recMaster == t) { recMaster = -1; length = 0; posD = 0.0; }
-        bool any = false;
-        for (auto& x : tr) any |= x.has;
-        if (! any) { length = 0; posD = 0.0; recMaster = -1; }
+        auto& k = tr[t];
+        if (k.recording) recording = -1;
+        k.reset();
+        k.wipe = true;
     }
-
     void clearAll() noexcept { for (int t = 0; t < NumTracks; ++t) clear (t); }
-    void stopAll() noexcept { for (int t = 0; t < NumTracks; ++t) setMode (t, Stop); }
+    void stopAll() noexcept { for (int t = 0; t < NumTracks; ++t) if (! tr[t].recording) setMode (t, Stop); }
 
     void setMode (int t, int m) noexcept
     {
         auto& k = tr[t];
-        if (m == k.mode) return;
+        float* d = k.data.load (std::memory_order_acquire);
 
-        if (m == Record)
+        if (k.recording)                                   // closing a take
         {
-            if (length == 0)                       // this track defines the loop
-            {
-                for (int i = 0; i < NumTracks; ++i) if (i != t) { tr[i].reset(); tr[i].dirty = true; tr[i].zeroPos = 0; }
-                k.reset(); k.mode = Record; recMaster = t; posD = 0.0;
-            }
-            else
-            {
-                if (k.dirty) finishWipe (k);       // rare: still being wiped, finish the part we need now
-                startDub (k);                      // slave "record" = overdub onto silence
-                k.recording = ! k.has;
-                k.has = true;
-                k.mode = Overdub;
-                if (posD == 0.0 && ! anyOtherRunning (t)) posD = 0.0;
-            }
-        }
-        else if (recMaster == t)                   // closing the first take
-        {
-            const int len = (int) posD;
-            recMaster = -1;
-            if (len < (int) (0.1 * sr)) { k.reset(); length = 0; posD = 0.0; return; }
-            int newLen = len;
-            if (quantSamples > 0.0)
-            {
-                const double bars = juce::jmax (1.0, std::round ((double) len / quantSamples));
-                newLen = (int) juce::jmin ((double) maxLen, bars * quantSamples);
-                for (int i = len; i < newLen; ++i) { k.L[(size_t) i] = 0.0f; k.R[(size_t) i] = 0.0f; }
-            }
-            length = newLen; posD = 0.0; k.has = true;
+            finishTake (t);
+            if (! k.has) return;
+            if (m == Record) m = Play;
             k.mode = m == Stop ? Stop : (m == Overdub ? Overdub : Play);
-            if (k.mode == Overdub) startDub (k);
-        }
-        else if (m == Overdub)
-        {
-            if (! k.has || length == 0) return;
-            startDub (k); k.mode = Overdub;
-        }
-        else if (m == Play)
-        {
-            if (! k.has || length == 0) return;
-            if (! anyRunning()) posD = 0.0;
-            k.mode = Play; k.dubbing = false; k.recording = false;
-        }
-        else
-        {
-            k.mode = Stop; k.dubbing = false; k.recording = false;
-            if (! anyRunning()) posD = 0.0;
-        }
-    }
-
-    // Swap the track with its pre-overdub snapshot (press again to redo).
-    void undo (int t) noexcept
-    {
-        auto& k = tr[t];
-        if (! k.undoReady || length == 0) return;
-        k.L.swap (k.uL); k.R.swap (k.uR);
-    }
-
-    // speed: 0.5, 1 or 2. muteMask: bit t set = track muted.
-    inline void process (float inL, float inR, float level, float speed, bool reverse, int muteMask,
-                         float& outL, float& outR) noexcept
-    {
-        outL = inL; outR = inR;
-        wipeStep();
-
-        if (recMaster >= 0)
-        {
-            auto& k = tr[recMaster];
-            const int i = (int) posD;
-            if (i < maxLen)
-            {
-                k.L[(size_t) i] = inL; k.R[(size_t) i] = inR;
-                posD += 1.0;
-            }
-            else { length = maxLen; posD = 0.0; k.has = true; k.mode = Play; recMaster = -1; }
             return;
         }
 
-        if (length == 0 || ! anyRunning()) return;
+        if (m == Record)
+        {
+            if (d == nullptr) return;                      // buffer not allocated yet (UI will do it)
+            if (recording >= 0) finishTake (recording);
+            for (int i = 0; i < NumPeaks; ++i) k.peaks[i].store (0.0f, std::memory_order_relaxed);
+            k.has = false; k.mode = Record; k.recording = true; k.wipe = false;
+            k.len.store (0); k.trimA.store (0); k.trimB.store (0);
+            k.pos = 0.0; k.writePos = 0; recording = t;
+        }
+        else if (m == Overdub)
+        {
+            if (! k.has) return;
+            k.mode = Overdub;
+        }
+        else if (m == Play)
+        {
+            if (! k.has) return;
+            if (k.mode == Stop) k.pos = (double) k.trimA.load();
+            k.mode = Play;
+        }
+        else
+        {
+            k.mode = Stop;
+            k.pos = (double) k.trimA.load();
+        }
+    }
 
-        const int len = length;
-        const int i0 = juce::jlimit (0, len - 1, (int) posD);
-        const int i1 = (i0 + 1) % len;
-        const float fr = (float) (posD - std::floor (posD));
-        float sl = 0.0f, sr_ = 0.0f;
+    // "Undo" in this looper resets the trim window to the whole take.
+    void undo (int t) noexcept
+    {
+        auto& k = tr[t];
+        if (! k.has) return;
+        k.trimA.store (0); k.trimB.store (k.len.load());
+    }
+
+    // muteMask: bit t set = track muted. speed: 0.5, 1 or 2.
+    inline void process (float inL, float inR, float level, float speed, bool reverse, uint32_t muteMask,
+                         float& outL, float& outR) noexcept
+    {
+        wipeStep();
+        const float in = 0.5f * (inL + inR);
+
+        if (recording >= 0)
+        {
+            auto& k = tr[recording];
+            float* d = k.data.load (std::memory_order_relaxed);
+            if (k.writePos < maxLen && d != nullptr)
+            {
+                d[k.writePos] = in;
+                const int b = juce::jmin (NumPeaks - 1, k.writePos / binSize);
+                const float v = std::abs (in);
+                if (v > k.peaks[b].load (std::memory_order_relaxed)) k.peaks[b].store (v, std::memory_order_relaxed);
+                ++k.writePos;
+                k.len.store (k.writePos, std::memory_order_relaxed);
+                k.pos = (double) k.writePos;
+            }
+            else
+                finishTake (recording, true);
+        }
+
+        float sum = 0.0f;
+        const double step = reverse ? -(double) speed : (double) speed;
 
         for (int t = 0; t < NumTracks; ++t)
         {
             auto& k = tr[t];
-            if (k.mode == Stop) continue;
+            if (k.mode == Stop || k.mode == Record || ! k.has) continue;
+            float* d = k.data.load (std::memory_order_relaxed);
+            if (d == nullptr) continue;
 
-            if ((muteMask & (1 << t)) == 0 && k.has && ! k.recording)
-            {
-                sl += k.L[(size_t) i0] + fr * (k.L[(size_t) i1] - k.L[(size_t) i0]);
-                sr_ += k.R[(size_t) i0] + fr * (k.R[(size_t) i1] - k.R[(size_t) i0]);
-            }
+            const int a = k.trimA.load (std::memory_order_relaxed);
+            const int b = k.trimB.load (std::memory_order_relaxed);
+            if (b - a < 2) continue;
+            if (k.pos < (double) a || k.pos >= (double) b) k.pos = reverse ? (double) (b - 1) : (double) a;
+
+            const int i0 = (int) k.pos;
+            int i1 = i0 + 1; if (i1 >= b) i1 = a;
+            const float fr = (float) (k.pos - (double) i0);
+            float s = d[i0] + fr * (d[i1] - d[i0]);
+
+            // short fades at the window edges keep trimmed loops click-free
+            const int fade = juce::jmin (96, (b - a) / 2);
+            const int fromA = i0 - a, fromB = b - 1 - i0;
+            if (fromA < fade) s *= (float) fromA / (float) fade;
+            if (fromB < fade) s *= (float) fromB / (float) fade;
+
+            if ((muteMask & (1u << t)) == 0) sum += s;
 
             if (k.mode == Overdub)
             {
-                if (k.dubbing && ! k.undoReady) snapshot (k, i0, len);
-                k.L[(size_t) i0] += inL;
-                k.R[(size_t) i0] += inR;
+                d[i0] += in;
+                const int pb = juce::jmin (NumPeaks - 1, i0 / binSize);
+                const float v = std::abs (d[i0]);
+                if (v > k.peaks[pb].load (std::memory_order_relaxed)) k.peaks[pb].store (v, std::memory_order_relaxed);
             }
-        }
-        outL = inL + sl * level;
-        outR = inR + sr_ * level;
 
-        posD += reverse ? -(double) speed : (double) speed;
-        if (posD >= (double) len) posD -= (double) len;
-        if (posD < 0.0) posD += (double) len;
+            k.pos += step;
+            if (k.pos >= (double) b) k.pos -= (double) (b - a);
+            else if (k.pos < (double) a) k.pos += (double) (b - a);
+        }
+
+        sum *= level;
+        outL = inL + sum;
+        outR = inR + sum;
     }
 
 private:
     struct Track
     {
-        std::vector<float> L, R, uL, uR;
-        std::vector<unsigned char> copied;
-        int mode = Stop, copiedCount = 0, zeroPos = 0, snapPos = 0;
-        bool has = false, undoReady = false, dubbing = false, recording = false, dirty = false;
+        std::atomic<float*> data { nullptr };
+        std::unique_ptr<float[]> store;
+        std::atomic<int> len { 0 }, trimA { 0 }, trimB { 0 }, posUi { 0 };
+        std::atomic<float> peaks[NumPeaks];
+        double pos = 0.0;
+        int mode = Stop, writePos = 0, wipePos = 0;
+        bool has = false, recording = false, wipe = false;
 
-        void reset() noexcept { mode = Stop; has = false; undoReady = false; dubbing = false; recording = false; copiedCount = 0; snapPos = 0; }
+        Track() { for (auto& p : peaks) p.store (0.0f, std::memory_order_relaxed); }
+
+        void reset() noexcept
+        {
+            mode = Stop; has = false; recording = false; pos = 0.0; writePos = 0; wipePos = 0;
+            len.store (0); trimA.store (0); trimB.store (0); posUi.store (0);
+            for (auto& p : peaks) p.store (0.0f, std::memory_order_relaxed);
+        }
     };
 
-    bool anyOtherRunning (int t) const noexcept { for (int i = 0; i < NumTracks; ++i) if (i != t && tr[i].mode != Stop) return true; return false; }
-
-    void finishWipe (Track& k) noexcept
+    // Close the take that is being recorded; ends up playing (or empty if it was too short).
+    void finishTake (int t, bool autoStop = false) noexcept
     {
-        const int to = juce::jmin (maxLen, length);
-        for (; k.zeroPos < to; ++k.zeroPos) { k.L[(size_t) k.zeroPos] = 0.0f; k.R[(size_t) k.zeroPos] = 0.0f; }
-        if (k.zeroPos >= maxLen) k.dirty = false;
+        auto& k = tr[t];
+        float* d = k.data.load (std::memory_order_relaxed);
+        recording = -1;
+        k.recording = false;
+        int len = k.writePos;
+        if (d == nullptr || len < (int) (0.05 * sr)) { k.reset(); k.wipe = true; return; }
+        if (quantSamples > 0.0 && ! autoStop)
+        {
+            const double bars = juce::jmax (1.0, std::round ((double) len / quantSamples));
+            const int newLen = (int) juce::jmin ((double) maxLen, bars * quantSamples);
+            for (int i = len; i < newLen; ++i) d[i] = 0.0f;
+            len = newLen;
+        }
+        k.len.store (len); k.trimA.store (0); k.trimB.store (len);
+        k.pos = 0.0; k.has = true; k.mode = Play;
     }
 
-    void startDub (Track& k) noexcept
-    {
-        k.dubbing = true; k.undoReady = false; k.copiedCount = 0; k.snapPos = 0;
-        std::fill (k.copied.begin(), k.copied.begin() + juce::jmax (length, 1), (unsigned char) 0);
-    }
-
-    // Copy the pre-overdub audio into the undo buffers, on demand plus a background sweep.
-    inline void snapshot (Track& k, int i0, int len) noexcept
-    {
-        if (! k.copied[(size_t) i0]) { k.uL[(size_t) i0] = k.L[(size_t) i0]; k.uR[(size_t) i0] = k.R[(size_t) i0]; k.copied[(size_t) i0] = 1; ++k.copiedCount; }
-        for (int n = 0; n < 8 && k.snapPos < len; ++n, ++k.snapPos)
-            if (! k.copied[(size_t) k.snapPos])
-            {
-                k.uL[(size_t) k.snapPos] = k.L[(size_t) k.snapPos]; k.uR[(size_t) k.snapPos] = k.R[(size_t) k.snapPos];
-                k.copied[(size_t) k.snapPos] = 1; ++k.copiedCount;
-            }
-        if (k.copiedCount >= len) k.undoReady = true;
-    }
-
-    // Wipe cleared tracks a few samples at a time.
+    // Cleared tracks are zeroed a few samples at a time (never blocks the audio thread).
     inline void wipeStep() noexcept
     {
         for (auto& k : tr)
         {
-            if (! k.dirty) continue;
-            for (int n = 0; n < 64 && k.zeroPos < maxLen; ++n, ++k.zeroPos) { k.L[(size_t) k.zeroPos] = 0.0f; k.R[(size_t) k.zeroPos] = 0.0f; }
-            if (k.zeroPos >= maxLen) k.dirty = false;
+            if (! k.wipe) continue;
+            float* d = k.data.load (std::memory_order_relaxed);
+            if (d == nullptr) { k.wipe = false; continue; }
+            for (int n = 0; n < 128 && k.wipePos < maxLen; ++n, ++k.wipePos) d[k.wipePos] = 0.0f;
+            if (k.wipePos >= maxLen) { k.wipe = false; k.wipePos = 0; }
         }
     }
 
-    double sr = 44100.0, posD = 0.0, quantSamples = 0.0;
-    int maxLen = 0, length = 0, recMaster = -1;
+    double sr = 44100.0, quantSamples = 0.0;
+    int maxLen = 0, binSize = 1, recording = -1;
     Track tr[NumTracks];
 };
 

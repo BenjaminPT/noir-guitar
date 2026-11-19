@@ -34,7 +34,7 @@ enum Id
     FrzOn, FrzSize, FrzMix,
     GltOn, GltMode, GltLen, GltAmt, GltMix,
     TunerOn, TunerRef,
-    BpmManual, HostSync, DlySync, M1Sync, M2Sync, GltSync, LoopFollow, LoopQuant, LoopTrack, LoopMute1, LoopMute2, LoopMute3, LoopMute4,
+    BpmManual, HostSync, DlySync, M1Sync, M2Sync, GltSync, LoopFollow, LoopQuant, LoopTrack,
     Macro1, Macro2, Macro3, Macro4, Macro5, Macro6, Macro7, Macro8,
     NumParams
 };
@@ -187,11 +187,7 @@ inline const ParamInfo kParams[NumParams] = {
     PC ("glt_sync", "Glitch Sync", "Free|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16|1/16.|1/16T|1/32", 0.0f),
     PB ("loop_follow", "Follow DAW Transport", 0.0f),
     PB ("loop_quant", "Quantize to Bars", 0.0f),
-    PC ("loop_track", "Looper Track", "Track 1|Track 2|Track 3|Track 4", 0.0f),
-    PB ("loop_m1", "Looper Mute 1", 0.0f),
-    PB ("loop_m2", "Looper Mute 2", 0.0f),
-    PB ("loop_m3", "Looper Mute 3", 0.0f),
-    PB ("loop_m4", "Looper Mute 4", 0.0f),
+    PC ("loop_track", "Looper Track", "Track 1|Track 2|Track 3|Track 4|Track 5|Track 6|Track 7|Track 8|Track 9|Track 10|Track 11|Track 12|Track 13|Track 14|Track 15|Track 16|Track 17|Track 18|Track 19|Track 20|Track 21|Track 22|Track 23|Track 24|Track 25|Track 26|Track 27|Track 28|Track 29|Track 30", 0.0f),
 
     PF ("macro1", "Macro 1", 0.0f, 1.0f, 0.0f, Pct),
     PF ("macro2", "Macro 2", 0.0f, 1.0f, 0.0f, Pct),
@@ -261,7 +257,7 @@ inline juce::String paramLabel (int i)
         { LoOn, LoMix, "Lo-Fi" },      { DlyOn, DlyMix, "Delay" },     { RevOn, RevMix, "Reverb" },
         { LoopOn, LoopRev, "Looper" }, { VocOn, VocMix, "Vocoder" },   { TbOn, TbMix, "Talk Box" },
         { GrOn, GrMix, "Granular" },   { FrzOn, FrzMix, "Freeze" },    { GltOn, GltMix, "Glitch" },
-        { TunerOn, TunerRef, "Tuner" }, { LoopTrack, LoopMute4, "Looper" }, { BpmManual, Macro8, "DAW" } };
+        { TunerOn, TunerRef, "Tuner" }, { LoopTrack, LoopTrack, "Looper" }, { BpmManual, Macro8, "DAW" } };
 
     for (const auto& r : ranges)
         if (i >= (int) r.first && i <= (int) r.last)

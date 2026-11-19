@@ -82,7 +82,7 @@ private:
     float level = 0.0f, hold = 0.0f, holdTime = 0.0f, sinceSignal = 99.0f, clipTime = 99.0f;
 };
 
-// Four-track looper surface: track rows (select / state / progress / mute) and transport buttons.
+// Multi-track looper surface (30 tracks, scrollable): waveform per track, draggable trim handles, mute, transport buttons.
 class LooperView : public juce::Component
 {
 public:
@@ -91,17 +91,25 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
     juce::Rectangle<int> rowBounds (int t) const;
+    juce::Rectangle<int> waveBounds (int t) const;
+    int hitHandle (int t, juce::Point<int> pos) const;
+    void clampScroll();
 
     NoirProcessor& proc;
     juce::TextButton rec { "REC" }, play { "PLAY" }, dub { "DUB" }, stop { "STOP" }, undo { "UNDO" }, clear { "CLEAR" }, stopAll { "STOP ALL" };
     juce::ToggleButton rev;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> revAtt;
     juce::Rectangle<int> rows;
-    float spin = 0.0f;
-    int selected = 0;
+    float spin = 0.0f, scroll = 0.0f;
+    int selected = 0, drag = 0, dragTrack = 0;     // drag: 0 none, 1 trim start, 2 trim end
 };
 
 // Pro-Q style EQ: spectrum analyser, response curve and draggable band nodes (8 bands).
